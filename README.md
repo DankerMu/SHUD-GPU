@@ -102,6 +102,7 @@ If you don't use `gcc`, you may edit the *Makefile* before compiling.
 ```
 
 Time semantics (input/runtime/output): see `docs/time_semantics.md`.
+RHS baseline semantics (Serial reference): see `docs/baseline_semantics.md`.
 
 The screen looks shoud be:
 ![screenshot](Fig/screenshot.png)

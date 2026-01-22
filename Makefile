@@ -41,9 +41,9 @@ LIB_SYS = /usr/local/lib/
 INC_OMP = /usr/local/opt/libomp/include
 LIB_OMP = /usr/local/opt/libomp/lib
 LIB_SUN = ${SUNDIALS_DIR}/lib
-CUDA_HOME = /usr/local/cuda
-INC_CUDA = ${CUDA_HOME}/include
-LIB_CUDA = ${CUDA_HOME}/lib64
+CUDA_HOME ?= /usr/local/cuda
+INC_CUDA ?= ${CUDA_HOME}/include
+LIB_CUDA ?= ${CUDA_HOME}/lib64
 
 INC_MPI = /usr/local/opt/open-mpi
 
@@ -64,7 +64,7 @@ MAIN_DEBUG 		= ${SRC_DIR}/main.cpp
 
 CC       = /usr/bin/g++
 MPICC    = /usr/local/bin/mpic++
-NVCC     = nvcc
+NVCC     ?= nvcc
 CFLAGS   = -O3 -g  -std=c++14
 #STCFLAG     = -static
 
@@ -96,25 +96,25 @@ RPATH_CUDA = '-Wl,-rpath,${LIB_SUN}' '-Wl,-rpath,${LIB_CUDA}'
 
 LK_FLAGS = -lm -lsundials_cvode -lsundials_nvecserial
 LK_OMP	= -Xpreprocessor -fopenmp -lomp -lsundials_nvecopenmp
-LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lcudart
+LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lsundials_sunmemcuda -lcudart
 LK_DYLN = "LD_LIBRARY_PATH=${LIB_SUN}"
 
-# Default supported GPU architectures (sm_70/75/80/86/89/90).
+# Default supported GPU architectures (sm_70/75/80/86).
 # Override at build time if needed, e.g.:
 #   make shud_cuda CUDA_GENCODE='-gencode arch=compute_80,code=sm_80'
-CUDA_GENCODE = -gencode arch=compute_70,code=sm_70 \
+CUDA_GENCODE ?= -gencode arch=compute_70,code=sm_70 \
 			   -gencode arch=compute_75,code=sm_75 \
 			   -gencode arch=compute_80,code=sm_80 \
-			   -gencode arch=compute_86,code=sm_86 \
-			   -gencode arch=compute_89,code=sm_89 \
-			   -gencode arch=compute_90,code=sm_90
+			   -gencode arch=compute_86,code=sm_86
 
 # CUDA sources are optional; this expands to empty if src/GPU/*.cu does not exist yet.
 CUDA_SRC = $(wildcard ${SRC_DIR}/GPU/*.cu)
 
+.PHONY: all check help cvode CVODE shud SHUD shud_omp shud_cuda clean
+
 all:
-	make clean
-	make shud
+	$(MAKE) clean
+	$(MAKE) shud
 	@echo
 check:
 	ls ${SUNDIALS_DIR}
@@ -124,7 +124,7 @@ check:
 help:
 	@(echo)
 	@echo "Usage:"
-	@(echo '       make all	    	- make both shud and shud_omp')
+	@(echo '       make all	    	- clean and make shud')
 	@(echo '       make cvode	    - install SUNDIALS/CVODE to ~/sundials')
 	@(echo '       make shud     	- make shud executable')
 	@(echo '       make shud_omp    - make shud_omp with OpenMP support')
@@ -188,7 +188,6 @@ clean:
 	@echo
 	@echo "Done."
 	@echo
-
 
 
 

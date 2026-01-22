@@ -27,6 +27,7 @@ int global_fflush_mode = 0;
 int global_implicit_mode = 1;
 int global_verbose_mode = 1;
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
+int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 using namespace std;
 double SHUD(FileIn *fin, FileOut *fout){
     double ret = 0.;

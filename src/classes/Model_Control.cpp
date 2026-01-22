@@ -270,6 +270,18 @@ void Control_Data::read(const char *fn){
             exfiltration =  val;
         else if (strcasecmp ("cryosphere", optstr) == 0)
             cryosphere =  val;
+        else if (strcasecmp("CLAMP_POLICY", optstr) == 0) {
+            const int policy = (int)val;
+            if (policy == 0 || policy == 1) {
+                CLAMP_POLICY = policy;
+            } else {
+                fprintf(stderr,
+                        "WARNING: invalid CLAMP_POLICY value %.3f in %s; using %d. Valid values: 0/1.\n",
+                        val,
+                        fn,
+                        CLAMP_POLICY);
+            }
+        }
 //        else if (strcasecmp ("STEPSIZE_FACTOR", optstr) == 0)
 //            a =  val;
 //        else if (strcasecmp ("MODEL_STEPSIZE", optstr) == 0)
@@ -350,6 +362,7 @@ void Control_Data::read(const char *fn){
     if (Verbose || global_verbose_mode){
         fprintf(stdout, "* \t ETStep: %.2f min\n", ETStep);
     }
+    fprintf(stdout, "* \t CLAMP_POLICY: %d\n", CLAMP_POLICY);
     fprintf(stdout, "* \t RADIATION_INPUT_MODE: %s\n",
             radiation_input_mode == SWNET ? "SWNET" : "SWDOWN");
     fprintf(stdout, "* \t SOLAR_LONLAT_MODE: %s\n", SolarLonLatModeName(solar_lonlat_mode));

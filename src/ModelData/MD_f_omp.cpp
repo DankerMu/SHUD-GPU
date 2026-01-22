@@ -113,11 +113,11 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
         
 #pragma omp for
         for (i = 0; i < NumEle; i++) {
-            uYsf[i] = (Y[iSF] >= 0.) ? Y[iSF] : 0.;
-            uYus[i] = (Y[iUS] >= 0.) ? Y[iUS] : 0.;
+            uYsf[i] = CLAMP_POLICY ? ((Y[iSF] >= 0.) ? Y[iSF] : 0.) : Y[iSF];
+            uYus[i] = CLAMP_POLICY ? ((Y[iUS] >= 0.) ? Y[iUS] : 0.) : Y[iUS];
             
             if(Ele[i].iBC == 0){ // NO BC
-                uYgw[i] = max(0.0, Y[iGW]);
+                uYgw[i] = CLAMP_POLICY ? max(0.0, Y[iGW]) : Y[iGW];
                 Ele[i].QBC = 0.;
             }else if(Ele[i].iBC > 0){ // BC fix head
                 Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
@@ -150,7 +150,7 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
         
 #pragma omp for
         for (i = 0; i < NumRiv; i++ ){
-            uYriv[i] = (Y[iRIV] >= 0.) ? Y[iRIV] : 0.;
+            uYriv[i] = CLAMP_POLICY ? ((Y[iRIV] >= 0.) ? Y[iRIV] : 0.) : Y[iRIV];
             /* qrivsurf and qrivsub are calculated in Element fluxes.
              qrivDown and qrivUp are calculated in River fluxes. */
 //            QrivDown[i] = 0.;
@@ -168,4 +168,3 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
         }
     } // end omp parallel.
 }
-

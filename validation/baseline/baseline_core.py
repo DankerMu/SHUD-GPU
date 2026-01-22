@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 
@@ -247,17 +247,16 @@ def _read_meta_for_endianness(path: Path, endianness: Literal["<", ">"]) -> DatM
 
 def read_shud_dat(path: Path, *, endianness: Literal["auto", "<", ">"] = "auto") -> DatMatrix:
     if endianness == "auto":
-        le_err: Optional[Exception] = None
-        try:
-            meta = _read_meta_for_endianness(path, "<")
-        except Exception as e:
-            le_err = e
-            meta = None  # type: ignore[assignment]
-        if meta is None:
+        errors: list[tuple[str, Exception]] = []
+        for fmt in ("<", ">"):
             try:
-                meta = _read_meta_for_endianness(path, ">")
-            except Exception:
-                raise le_err  # noqa: B904
+                meta = _read_meta_for_endianness(path, fmt)  # type: ignore[arg-type]
+                break
+            except Exception as exc:
+                errors.append((fmt, exc))
+        else:
+            msg = "; ".join(f"{fmt}: {exc}" for fmt, exc in errors)
+            raise BaselineError(f"failed to parse .dat file in either endian for {path}: {msg}") from errors[0][1]
     else:
         meta = _read_meta_for_endianness(path, endianness)
 
@@ -287,7 +286,13 @@ def read_time_csv(path: Path) -> dict[str, np.ndarray]:
         parts = re.split(r"\s+", s)
         if len(parts) < 6:
             raise BaselineError(f"unexpected time.csv row format in {path}: {line!r}")
-        rows.append([float(x) for x in parts[:6]])
+        try:
+            row = [float(x) for x in parts[:6]]
+        except ValueError as exc:
+            raise BaselineError(f"invalid number in time csv {path}: {line!r}") from exc
+        if not all(math.isfinite(x) for x in row):
+            raise BaselineError(f"non-finite number in time csv {path}: {line!r}")
+        rows.append(row)
 
     if not rows:
         raise BaselineError(f"no rows parsed from time csv: {path}")
@@ -518,6 +523,10 @@ def compare_runs(
     tol: float,
 ) -> dict[str, float]:
     diffs: dict[str, float] = {}
+    if "time_min" not in baseline_arrays:
+        raise BaselineError("baseline missing array: time_min")
+    if "y" not in baseline_arrays:
+        raise BaselineError("baseline missing array: y")
     diffs["time_min"] = max_abs_diff(baseline_arrays["time_min"], run.time_min)
     diffs["y"] = max_abs_diff(baseline_arrays["y"], run.y)
 

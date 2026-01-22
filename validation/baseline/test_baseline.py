@@ -192,6 +192,32 @@ class TestDatReader(unittest.TestCase):
                 np.fromfile = real  # type: ignore[assignment]
 
 
+class TestTimeCsv(unittest.TestCase):
+    def test_read_time_csv_invalid_number_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "ccw.time.csv"
+            p.write_text(
+                "time_Minutes Time_Days Task_perc CPUTime_s WallTime_s Num_fcall\n"
+                "0 0 0 0 0 nope\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(bc.BaselineError) as ctx:
+                _ = bc.read_time_csv(p)
+            self.assertIn("invalid number", str(ctx.exception))
+
+    def test_read_time_csv_non_finite_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "ccw.time.csv"
+            p.write_text(
+                "time_Minutes Time_Days Task_perc CPUTime_s WallTime_s Num_fcall\n"
+                "0 0 0 0 0 nan\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(bc.BaselineError) as ctx:
+                _ = bc.read_time_csv(p)
+            self.assertIn("non-finite", str(ctx.exception))
+
+
 class TestExtractRun(unittest.TestCase):
     def test_extract_run_builds_y_concat_and_flux_arrays(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -287,6 +313,14 @@ class TestBaselineIO(unittest.TestCase):
         }
         diffs = bc.compare_runs(baseline_arrays=baseline_arrays, run=run, tol=1e-12)
         self.assertTrue(all(d <= 1e-12 for d in diffs.values()))
+
+        with self.assertRaises(bc.BaselineError) as ctx:
+            _ = bc.compare_runs(baseline_arrays={"y": run.y}, run=run, tol=1e-12)
+        self.assertIn("time_min", str(ctx.exception))
+
+        with self.assertRaises(bc.BaselineError) as ctx:
+            _ = bc.compare_runs(baseline_arrays={"time_min": run.time_min}, run=run, tol=1e-12)
+        self.assertIn("baseline missing array: y", str(ctx.exception))
 
         with self.assertRaises(bc.BaselineError):
             _ = bc.compare_runs(baseline_arrays={"time_min": run.time_min, "y": run.y}, run=run, tol=1e-12)

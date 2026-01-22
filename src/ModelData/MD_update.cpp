@@ -43,19 +43,18 @@ void Model_Data::f_updatei(double  *Y, double *DY, double t, int flag){
     switch (flag) {
         case 1:
             for (int i = 0; i < NumEle; i++) {
-                uYsf[i] = (Y[i] >= 0.) ? Y[i] : 0.;
+                uYsf[i] = CLAMP_POLICY ? ((Y[i] >= 0.) ? Y[i] : 0.) : Y[i];
             }
             break;
         case 2:
             for (int i = 0; i < NumEle; i++) {
-                uYus[i] = (Y[i] >= 0.) ? Y[i] : 0.;
+                uYus[i] = CLAMP_POLICY ? ((Y[i] >= 0.) ? Y[i] : 0.) : Y[i];
             }
             break;
         case 3:
             for (int i = 0; i < NumEle; i++) {
-                uYgw[i] = (Y[i] >= 0.) ? Y[i] : 0.;
                 if(Ele[i].iBC == 0){ // NO BC
-                    uYgw[i] = max(0.0, Y[i]);
+                    uYgw[i] = CLAMP_POLICY ? max(0.0, Y[i]) : Y[i];
                     Ele[i].QBC = 0.;
                 }else if(Ele[i].iBC > 0){ // BC fix head
                     Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
@@ -68,7 +67,7 @@ void Model_Data::f_updatei(double  *Y, double *DY, double t, int flag){
             break;
         case 4:
             for (int i = 0; i < NumRiv; i++) {
-                uYriv[i] = (Y[i] >= 0.) ? Y[i] : 0.;
+                uYriv[i] = CLAMP_POLICY ? ((Y[i] >= 0.) ? Y[i] : 0.) : Y[i];
 //                uYriv[i] = Y[i];
 //                QrivSurf[i] = 0.;
 //                QrivSub[i] = 0.;
@@ -89,7 +88,7 @@ void Model_Data::f_updatei(double  *Y, double *DY, double t, int flag){
             break;
         case 5:
             for (int i = 0; i < NumLake; i++) {
-                uYlake[i] = (Y[i] >= 0.) ? Y[i] : 0.;
+                uYlake[i] = CLAMP_POLICY ? ((Y[i] >= 0.) ? Y[i] : 0.) : Y[i];
             }
             break;
         default:
@@ -106,11 +105,10 @@ void Model_Data::f_update(double  *Y, double *DY, double t){
             QeleSubTot[i] = 0.;
             QeleSurfTot[i] = 0.;
         }
-        uYsf[i] = Y[iSF];
-        uYus[i] = Y[iUS];
+        uYsf[i] = CLAMP_POLICY ? ((Y[iSF] >= 0.) ? Y[iSF] : 0.) : Y[iSF];
+        uYus[i] = CLAMP_POLICY ? ((Y[iUS] >= 0.) ? Y[iUS] : 0.) : Y[iUS];
         if(Ele[i].iBC == 0){ // NO BC
-//            uYgw[i] = max(0.0, Y[iGW]);
-            uYgw[i] = Y[iGW];
+            uYgw[i] = CLAMP_POLICY ? max(0.0, Y[iGW]) : Y[iGW];
             Ele[i].QBC = 0.;
         }else if(Ele[i].iBC > 0){ // BC fix head
             Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
@@ -140,7 +138,7 @@ void Model_Data::f_update(double  *Y, double *DY, double t){
     }//end of for j=1:NumEle
     
     for (int i = 0; i < NumRiv; i++ ){
-        uYriv[i] = Y[iRIV];
+        uYriv[i] = CLAMP_POLICY ? max(0.0, Y[iRIV]) : Y[iRIV];
         /* qrivsurf and qrivsub are calculated in Element fluxes.
          qrivDown and qrivUp are calculated in River fluxes. */
         Riv[i].updateRiver(uYriv[i]);
@@ -169,7 +167,7 @@ void Model_Data::f_update(double  *Y, double *DY, double t){
         Qe2r_Sub[i] = 0.;
     }
     for (int i = 0; i < NumLake; i++) {
-        yLakeStg[i] = Y[iLAKE];
+        yLakeStg[i] = CLAMP_POLICY ? max(0.0, Y[iLAKE]) : Y[iLAKE];
         lake[i].yStage = yLakeStg[i];
         lake[i].update();
         y2LakeArea[i] = lake[i].u_toparea;

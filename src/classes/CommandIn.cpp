@@ -5,13 +5,15 @@
 //
 
 #include "CommandIn.hpp"
+#include <errno.h>
 void CommandIn::SHUD_help(void ){
     printf ("\n\nUsage:\n");
-    printf ("./shud [-0gv] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] <project_name>\n\n");
+    printf ("./shud [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] <project_name>\n\n");
     printf (" -0 Dummy simulation. Load input and write output, but no calculation.\n");
     printf (" -f fflush for each time interval. fflush export data frequently, but slow down performance on cluster.\n");
     printf (" -g Sequential coupled Surface-Unsaturated-Saturated-River mode.\n");
     printf (" -v Dummy simulation. Load input and write output, but no calculation.\n");
+    printf (" -C ClampPolicy for non-negative state truncation (0=OFF, 1=ON). Default is 1.\n");
     printf (" -c Calibration file (.cfg.calib). \n");
     printf (" -o output folder. Default is output/projname.out\n");
     printf (" -p projectfile, which includes the path to input files and output path.\n");
@@ -23,7 +25,7 @@ void CommandIn::parse(int argc, char **argv){
         SHUD_help();
         myexit(ERRSUCCESS);
     }
-    while ((c = getopt (argc, argv, "0fgvc:e:n:o:p:")) != -1){
+    while ((c = getopt (argc, argv, "0fgvC:c:e:n:o:p:")) != -1){
         switch (c){
             case '0':
                 dummy_mode = 1;
@@ -37,6 +39,21 @@ void CommandIn::parse(int argc, char **argv){
             case 'v':
                 global_verbose_mode = 1;
                 break;
+            case 'C': {
+                char *endptr = NULL;
+                errno = 0;
+                const long v = strtol(optarg, &endptr, 10);
+                if (errno == 0 && endptr != NULL && *endptr == '\0' && (v == 0 || v == 1)) {
+                    CLAMP_POLICY = (int)v;
+                    CLAMP_POLICY_CLI_SET = 1;
+                } else {
+                    fprintf(stderr,
+                            "WARNING: invalid ClampPolicy '%s' (expect 0/1); using default %d.\n",
+                            optarg,
+                            CLAMP_POLICY);
+                }
+                break;
+            }
             case 'c':
                 strcpy(calibfile, optarg);
                 break;
@@ -55,8 +72,11 @@ void CommandIn::parse(int argc, char **argv){
                 iprj = 1;
                 break;
             case '?':
-                if (optopt == 'p')
-                    fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+                if (optopt == 'C') {
+                    fprintf(stderr, "ERROR: option -%c requires an argument (0=OFF, 1=ON).\n", optopt);
+                } else if (optopt == 'p' || optopt == 'c' || optopt == 'e' || optopt == 'n' || optopt == 'o') {
+                    fprintf(stderr, "ERROR: option -%c requires an argument.\n", optopt);
+                }
                 else if (isprint (optopt))
                     fprintf (stderr, "Unknown option `-%c'.\n", optopt);
                 else

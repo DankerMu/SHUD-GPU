@@ -357,6 +357,8 @@ class BaselineConfig:
 def _apply_ccw_overrides(cfg_path: Path, cfg: BaselineConfig) -> None:
     upsert_cfg_kv(cfg_path, "END", f"{cfg.end_days:g}")
     upsert_cfg_kv(cfg_path, "SCR_INTV", f"{cfg.dt_min:d}")
+    # Baseline golden is defined under legacy non-negative clamp semantics (ClampPolicy=OFF).
+    upsert_cfg_kv(cfg_path, "CLAMP_POLICY", "0")
 
     # Ensure deterministic binary output and a single output cadence across key channels.
     upsert_cfg_kv(cfg_path, "ASCII_OUTPUT", "0")

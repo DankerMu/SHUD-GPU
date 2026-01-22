@@ -96,6 +96,14 @@ extern int global_fflush_mode;
 extern int global_implicit_mode;
 extern int global_verbose_mode;
 extern int lakeon;
+/* ClampPolicy: whether to clamp state variables to non-negative values before flux computation.
+ * 1 (default): clamp enabled. 0: clamp disabled (legacy serial behavior).
+ *
+ * Note: this is a shared CPU/GPU-facing interface; GPU backends should expose an equivalent switch.
+ */
+extern int CLAMP_POLICY;
+/* Whether CLAMP_POLICY is explicitly set by CLI (-C). When true, config-file CLAMP_POLICY is ignored. */
+extern int CLAMP_POLICY_CLI_SET;
 
 extern double *uYsf;
 extern double *uYus;

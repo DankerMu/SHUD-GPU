@@ -91,6 +91,7 @@ make shud_omp
 #### 阶段 A：`f_update(Y, DY, t)` —— 初始化/BC/清零
 
 - 从 `Y` 填充工作态变量：`uYsf/uYus/uYgw/uYriv/yLakeStg`
+  - **状态非负截断（ClampPolicy）**：当 `CLAMP_POLICY=1` 时，以上工作态变量在装配时会被截断到 `>=0`（BC 固定水头/水位的元素/河道除外）；当 `CLAMP_POLICY=0` 时，保持使用原始 `Y`（用于严格复现历史 Serial baseline）
 - 应用边界条件：
   - 元素 GW：`iBC>0` 固定水头（`yBC`），`iBC<0` 固定通量（`QBC`）
   - 河道：`BC>0` 固定水位（`yBC`），`BC<0` 固定入流（`qBC`）
@@ -185,8 +186,13 @@ make shud_omp
    - OpenMP `f_applyDY_omp(...)`：使用 `u_TopArea` 做归一化，且未执行 `dA->dY` 转换与截断逻辑
 
 4. **状态非负裁剪策略不同**
-   - OpenMP `f_update_omp(...)` 对 `uYsf/uYus/uYgw/uYriv` 有显式 `max(0, Y)` 的裁剪
-   - Serial `f_update(...)` 使用原始 `Y`（BC 固定水头的元素/河道例外）
+   - 现已提供统一开关 `CLAMP_POLICY`（CPU/GPU 共用接口）控制 `uYsf/uYus/uYgw/uYriv/yLakeStg` 的非负截断：
+     - `CLAMP_POLICY=1`：启用截断（默认）
+     - `CLAMP_POLICY=0`：关闭截断（保持历史 Serial baseline 语义）
+   - 设置方式（二选一即可）：
+     - 配置文件（`*.cfg.para`）：`CLAMP_POLICY 0/1`
+     - CLI：`./shud -C 0/1 ...`
+   - 优先级：CLI `-C` > 配置文件 `CLAMP_POLICY` > 默认值（`1`）。当命令行指定 `-C` 时，将忽略配置文件中的 `CLAMP_POLICY`。
 
 5. **并行写共享聚合量的风险**
    - OpenMP `#pragma omp for` 循环中存在对共享聚合数组的 `+=` 写入（例如 `QLakeSurf/QLakeSub/QLakeRivIn` 等）时，若未做原子/分块归约，会引入非确定性甚至错误结果

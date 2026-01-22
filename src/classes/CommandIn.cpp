@@ -5,6 +5,7 @@
 //
 
 #include "CommandIn.hpp"
+#include <errno.h>
 void CommandIn::SHUD_help(void ){
     printf ("\n\nUsage:\n");
     printf ("./shud [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] <project_name>\n\n");
@@ -39,9 +40,12 @@ void CommandIn::parse(int argc, char **argv){
                 global_verbose_mode = 1;
                 break;
             case 'C': {
-                const int v = atoi(optarg);
-                if (v == 0 || v == 1) {
-                    CLAMP_POLICY = v;
+                char *endptr = NULL;
+                errno = 0;
+                const long v = strtol(optarg, &endptr, 10);
+                if (errno == 0 && endptr != NULL && *endptr == '\0' && (v == 0 || v == 1)) {
+                    CLAMP_POLICY = (int)v;
+                    CLAMP_POLICY_CLI_SET = 1;
                 } else {
                     fprintf(stderr,
                             "WARNING: invalid ClampPolicy '%s' (expect 0/1); using default %d.\n",
@@ -68,8 +72,11 @@ void CommandIn::parse(int argc, char **argv){
                 iprj = 1;
                 break;
             case '?':
-                if (optopt == 'p')
-                    fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+                if (optopt == 'C') {
+                    fprintf(stderr, "ERROR: option -%c requires an argument (0=OFF, 1=ON).\n", optopt);
+                } else if (optopt == 'p' || optopt == 'c' || optopt == 'e' || optopt == 'n' || optopt == 'o') {
+                    fprintf(stderr, "ERROR: option -%c requires an argument.\n", optopt);
+                }
                 else if (isprint (optopt))
                     fprintf (stderr, "Unknown option `-%c'.\n", optopt);
                 else

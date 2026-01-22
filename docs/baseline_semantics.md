@@ -192,6 +192,7 @@ make shud_omp
    - 设置方式（二选一即可）：
      - 配置文件（`*.cfg.para`）：`CLAMP_POLICY 0/1`
      - CLI：`./shud -C 0/1 ...`
+   - 优先级：CLI `-C` > 配置文件 `CLAMP_POLICY` > 默认值（`1`）。当命令行指定 `-C` 时，将忽略配置文件中的 `CLAMP_POLICY`。
 
 5. **并行写共享聚合量的风险**
    - OpenMP `#pragma omp for` 循环中存在对共享聚合数组的 `+=` 写入（例如 `QLakeSurf/QLakeSub/QLakeRivIn` 等）时，若未做原子/分块归约，会引入非确定性甚至错误结果

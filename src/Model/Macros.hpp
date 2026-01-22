@@ -102,6 +102,8 @@ extern int lakeon;
  * Note: this is a shared CPU/GPU-facing interface; GPU backends should expose an equivalent switch.
  */
 extern int CLAMP_POLICY;
+/* Whether CLAMP_POLICY is explicitly set by CLI (-C). When true, config-file CLAMP_POLICY is ignored. */
+extern int CLAMP_POLICY_CLI_SET;
 
 extern double *uYsf;
 extern double *uYus;

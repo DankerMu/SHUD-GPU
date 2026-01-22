@@ -271,15 +271,29 @@ void Control_Data::read(const char *fn){
         else if (strcasecmp ("cryosphere", optstr) == 0)
             cryosphere =  val;
         else if (strcasecmp("CLAMP_POLICY", optstr) == 0) {
-            const int policy = (int)val;
-            if (policy == 0 || policy == 1) {
-                CLAMP_POLICY = policy;
-            } else {
-                fprintf(stderr,
-                        "WARNING: invalid CLAMP_POLICY value %.3f in %s; using %d. Valid values: 0/1.\n",
-                        val,
-                        fn,
-                        CLAMP_POLICY);
+            if (!CLAMP_POLICY_CLI_SET) {
+                const int default_policy = CLAMP_POLICY;
+                char policy_str[MAXLEN] = "";
+                if (sscanf(str, "%s %s", optstr, policy_str) != 2) {
+                    fprintf(stderr,
+                            "WARNING: CLAMP_POLICY missing value in %s; using default %d. Valid values: 0/1.\n",
+                            fn,
+                            default_policy);
+                    CLAMP_POLICY = default_policy;
+                } else {
+                    char *endptr = NULL;
+                    const double policy_val = strtod(policy_str, &endptr);
+                    if (endptr != NULL && *endptr == '\0' && (policy_val == 0.0 || policy_val == 1.0)) {
+                        CLAMP_POLICY = (policy_val == 1.0) ? 1 : 0;
+                    } else {
+                        fprintf(stderr,
+                                "WARNING: invalid CLAMP_POLICY value '%s' in %s; using default %d. Valid values: 0/1.\n",
+                                policy_str,
+                                fn,
+                                default_policy);
+                        CLAMP_POLICY = default_policy;
+                    }
+                }
             }
         }
 //        else if (strcasecmp ("STEPSIZE_FACTOR", optstr) == 0)

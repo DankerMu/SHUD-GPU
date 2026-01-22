@@ -30,6 +30,31 @@ int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
 using namespace std;
+
+#ifdef _CUDA_ON
+/* CUDA build: keep RHS evaluation on CPU for now.
+ * - Sync state from device -> host before calling the existing CPU RHS.
+ * - Sync dY (RHS output) from host -> device before returning to CVODE.
+ */
+static int f_cuda_hostrhs(double t, N_Vector y, N_Vector ydot, void *user_data)
+{
+    if (N_VGetVectorID(y) == SUNDIALS_NVEC_CUDA) {
+        N_VCopyFromDevice_Cuda(y);
+    }
+    if (N_VGetVectorID(ydot) == SUNDIALS_NVEC_CUDA) {
+        /* Ensure host_data is the authoritative copy before CPU writes. */
+        N_VCopyFromDevice_Cuda(ydot);
+    }
+
+    const int ret = f(t, y, ydot, user_data);
+
+    if (N_VGetVectorID(ydot) == SUNDIALS_NVEC_CUDA) {
+        N_VCopyToDevice_Cuda(ydot);
+    }
+    return ret;
+}
+#endif
+
 double SHUD(FileIn *fin, FileOut *fout){
     double ret = 0.;
     Model_Data  *MD;        /* Model Data                */
@@ -53,8 +78,24 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->CheckInputData();
     fout->updateFilePath();
     NY = MD->NumY;
-    globalY = new double[NY];
-#ifdef _OPENMP_ON
+#ifdef _CUDA_ON
+    screeninfo("\nCUDA: ON (NVECTOR_CUDA)\n");
+    udata = N_VNew_Cuda(NY, sunctx);
+    du = N_VNew_Cuda(NY, sunctx);
+    check_flag((void *)udata, "N_VNew_Cuda", 0);
+    check_flag((void *)du, "N_VNew_Cuda", 0);
+
+    /* Access device pointer to validate NVECTOR_CUDA data layout. */
+    if (N_VGetDeviceArrayPointer_Cuda(udata) == NULL) {
+        fprintf(stderr, "\nSUNDIALS_ERROR: N_VGetDeviceArrayPointer_Cuda() returned NULL\n\n");
+        myexit(ERRCVODE);
+    }
+    if (N_VIsManagedMemory_Cuda(udata)) {
+        screeninfo("WARNING: NVECTOR_CUDA is using managed memory (UVM).\n");
+    } else {
+        screeninfo("NVECTOR_CUDA memory: unmanaged device memory\n");
+    }
+#elif defined(_OPENMP_ON)
     omp_set_num_threads(MD->CS.num_threads);
     screeninfo("\nopenMP: ON. No of Threads = %d\n", MD->CS.num_threads);
     udata = N_VNew_OpenMP(NY, MD->CS.num_threads, sunctx);
@@ -67,10 +108,18 @@ double SHUD(FileIn *fin, FileOut *fout){
     screeninfo("\nGlobal Implicit Mode: ON\n");
     MD->LoadIC();
     MD->SetIC2Y(udata);
+#ifdef _CUDA_ON
+    /* Initial conditions were set on host; sync to device for CVODE. */
+    N_VCopyToDevice_Cuda(udata);
+#endif
     MD->initialize_output();
     MD->PrintInit(fout->Init_bak, 0);
     MD->InitFloodAlert(fout->floodout);
+#ifdef _CUDA_ON
+    SetCVODE(mem, f_cuda_hostrhs, MD, udata, LS, sunctx);
+#else
     SetCVODE(mem, f, MD, udata, LS, sunctx);
+#endif
     /* set start time */
     t = MD->CS.StartTime;
     tnext = t;
@@ -114,6 +163,10 @@ double SHUD(FileIn *fin, FileOut *fout){
             }
         }
         //            CVODEstatus(mem, udata, t);
+#ifdef _CUDA_ON
+        /* Sync state back to host for CPU-side summary/output. */
+        N_VCopyFromDevice_Cuda(udata);
+#endif
         MD->summary(udata);
         MD->CS.ExportResults(t);
         MD->flood->FloodWarning(t);
@@ -122,10 +175,11 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->PrintInit(fout->Init_update, t);
     MD->modelSummary(1);
     /* Free memory */
-    N_VDestroy_Serial(udata);
-    N_VDestroy_Serial(du);
+    N_VDestroy(udata);
+    N_VDestroy(du);
     /* Free integrator memory */
     CVodeFree(&mem);
+    SUNLinSolFree(LS);
 
     SUNContext_Free(&sunctx);
     delete MD;
@@ -293,23 +347,28 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 //    fclose(fp4);
     MD->modelSummary(1);
     /* Free memory */
-    N_VDestroy_Serial(u1);
-    N_VDestroy_Serial(u2);
-    N_VDestroy_Serial(u3);
-    N_VDestroy_Serial(u4);
-    N_VDestroy_Serial(u5);
+    N_VDestroy(u1);
+    N_VDestroy(u2);
+    N_VDestroy(u3);
+    N_VDestroy(u4);
+    N_VDestroy(u5);
     
-    N_VDestroy_Serial(du1);
-    N_VDestroy_Serial(du2);
-    N_VDestroy_Serial(du3);
-    N_VDestroy_Serial(du4);
-    N_VDestroy_Serial(du5);
+    N_VDestroy(du1);
+    N_VDestroy(du2);
+    N_VDestroy(du3);
+    N_VDestroy(du4);
+    N_VDestroy(du5);
     /* Free integrator memory */
     CVodeFree(&mem1);
     CVodeFree(&mem2);
     CVodeFree(&mem3);
     CVodeFree(&mem4);
     CVodeFree(&mem5);
+    SUNLinSolFree(LS1);
+    SUNLinSolFree(LS2);
+    SUNLinSolFree(LS3);
+    SUNLinSolFree(LS4);
+    SUNLinSolFree(LS5);
 
     SUNContext_Free(&sunctx1);
     SUNContext_Free(&sunctx2);

@@ -8,6 +8,10 @@
 #include <math.h>
 #include <vector>
 
+#ifdef _CUDA_ON
+#include "nvector/nvector_cuda.h"
+#endif
+
 #ifdef _OPENMP_ON
 #include "omp.h"
 #include "nvector/nvector_openmp.h" /* serial N_Vector types, fcts., macros */
@@ -15,6 +19,33 @@
 #else
 #include "nvector/nvector_serial.h" /* contains the definition of type N_Vector */
 #define SET_VALUE(v, i) NV_Ith_S(v,i)
+#endif
+
+#ifdef _CUDA_ON
+/* NVECTOR_CUDA does not provide NV_DATA_* macros. Keep existing code paths
+ * (NV_DATA_S / NV_Ith_S) working by dispatching to host data for CUDA vectors.
+ *
+ * Note: In CUDA builds we may still create serial vectors (e.g. uncoupled mode),
+ * so this must be a runtime dispatch based on N_Vector_ID.
+ */
+static inline realtype* SHUD_NVecHostData(N_Vector v)
+{
+    if (v == NULL) {
+        return NULL;
+    }
+    const N_Vector_ID id = N_VGetVectorID(v);
+    if (id == SUNDIALS_NVEC_CUDA) {
+        return N_VGetHostArrayPointer_Cuda(v);
+    }
+    /* Fallback: treat as serial. */
+    return NV_CONTENT_S(v)->data;
+}
+
+/* Override NV_DATA_S so existing CPU code can work with CUDA vectors via host
+ * arrays (paired with explicit N_VCopy{From,To}Device_Cuda in shud.cpp).
+ */
+#undef NV_DATA_S
+#define NV_DATA_S(v) SHUD_NVecHostData(v)
 #endif
 
 /*========index===============*/

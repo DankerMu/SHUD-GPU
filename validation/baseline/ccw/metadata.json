@@ -1,0 +1,39 @@
+{
+  "artifacts": {
+    "golden_npz": "validation/baseline/ccw/golden.npz",
+    "golden_npz_sha256": "3a488cd28638bd38d525ba3fa994b53105d5cf9aebac98439036c600f6ba54cf",
+    "shud_bin": "shud"
+  },
+  "case": "ccw",
+  "config": {
+    "dt_min": 60,
+    "end_days": 2.0,
+    "terrain_radiation": 0
+  },
+  "created_utc": "2026-01-22T09:36:45Z",
+  "environment": {
+    "numpy": "2.0.2",
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "python": "3.9.6"
+  },
+  "repo": {
+    "git_rev": "b67d03c470286022b601ed99735fac4053978cc4"
+  },
+  "required_outputs": {
+    "eleqsub": "ccw.eleqsub.dat",
+    "eleqsurf": "ccw.eleqsurf.dat",
+    "eleveta": "ccw.eleveta.dat",
+    "elevinfil": "ccw.elevinfil.dat",
+    "elevrech": "ccw.elevrech.dat",
+    "eleygw": "ccw.eleygw.dat",
+    "eleysurf": "ccw.eleysurf.dat",
+    "eleyunsat": "ccw.eleyunsat.dat",
+    "rivqdown": "ccw.rivqdown.dat",
+    "rivqsub": "ccw.rivqsub.dat",
+    "rivqsurf": "ccw.rivqsurf.dat",
+    "rivqup": "ccw.rivqup.dat",
+    "rivystage": "ccw.rivystage.dat"
+  },
+  "schema_version": 1,
+  "tolerance": 1e-12
+}

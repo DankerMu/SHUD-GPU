@@ -95,7 +95,7 @@ RPATH = '-Wl,-rpath,${LIB_SUN}'
 RPATH_CUDA = '-Wl,-rpath,${LIB_SUN}' '-Wl,-rpath,${LIB_CUDA}'
 
 LK_FLAGS = -lm -lsundials_cvode -lsundials_nvecserial
-LK_OMP	= -Xpreprocessor -fopenmp -lomp -lsundials_nvecopenmp
+LK_OMP	= -fopenmp -lsundials_nvecopenmp
 LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lsundials_sunmemcuda -lcudart
 LK_DYLN = "LD_LIBRARY_PATH=${LIB_SUN}"
 

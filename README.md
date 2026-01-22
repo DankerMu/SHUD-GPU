@@ -101,8 +101,7 @@ If you don't use `gcc`, you may edit the *Makefile* before compiling.
 ./shud ccw
 ```
 
-Time semantics (input/runtime/output): see `docs/time_semantics.md`.
-RHS baseline semantics (Serial reference): see `docs/baseline_semantics.md`.
+Semantics docs: time stepping + forcing/ET update order (Section 2.1) and RHS baseline (Serial reference): see `docs/baseline_semantics.md`.
 
 The screen looks shoud be:
 ![screenshot](Fig/screenshot.png)

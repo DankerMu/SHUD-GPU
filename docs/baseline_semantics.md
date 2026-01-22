@@ -9,6 +9,26 @@
 
 ---
 
+## 0. 构建命令（`make shud` vs `make shud_omp`）
+
+本仓库 `Makefile` 提供两条主要 CPU 构建路径：
+
+- **Serial Baseline（推荐用于对齐/回归）**：不定义 `_OPENMP_ON`，生成 `./shud`
+
+```bash
+make clean
+make shud
+```
+
+- **OpenMP（并行路径，当前不作为 Baseline）**：编译期定义 `_OPENMP_ON`（`Makefile` 通过 `-D_OPENMP_ON`），生成 `./shud_omp`
+
+```bash
+make clean
+make shud_omp
+```
+
+> 提示：`validation/baseline` 工作流默认要求使用 `make shud` 的 Serial 版本。
+
 ## 1. 为什么选择 Serial 作为 Baseline（含 ET / Lake / River 完整逻辑）
 
 ### 1.1 Serial 路径具备“完整 RHS 逻辑闭环”
@@ -178,7 +198,10 @@
 
 ## 4. 兼容模式定义：`LEGACY_COMPAT` vs `PHYSICS_FIX`
 
-这两个模式用于后续多后端（尤其 GPU）开发时区分“严格复现”与“物理修复”。目前它们主要作为**语义约定/规格**，不要求已在代码中实现开关。
+这两个模式用于后续多后端（尤其 GPU）开发时区分“严格复现”与“物理修复”。目前它们主要作为**语义约定/规格**：
+
+- **现状**：代码中尚未实现对应开关（既没有编译时宏，也没有运行时 flag）；文档中仅用于描述期望行为。
+- **约定（建议的落地方式）**：未来实现时建议使用**编译时预处理宏**（例如编译参数 `-DLEGACY_COMPAT=1` / `-DPHYSICS_FIX=1`），而不是运行时 flag；两者应互斥，缺省行为应与 `LEGACY_COMPAT` 一致（避免破坏既有回归/golden）。
 
 ### 4.1 `LEGACY_COMPAT`（严格复现 Baseline）
 
@@ -214,4 +237,3 @@
 - 任何新后端（GPU/OpenMP）的验收建议：
   1. `LEGACY_COMPAT`：先做到与 Serial golden 在给定容差内一致
   2. `PHYSICS_FIX`：再逐项引入修复，并为每项修复建立新的对照或指标
-

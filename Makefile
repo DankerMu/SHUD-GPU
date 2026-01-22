@@ -17,6 +17,10 @@
 #			Library/Include paths:
 #				-L/usr/local/opt/libomp/lib 
 #				-I/usr/local/opt/libomp/include
+#  3 For CUDA build (Linux / CUDA machine only):
+#       - Install CUDA Toolkit (nvcc) and a CUDA-enabled SUNDIALS build (NVECTOR_CUDA).
+#       - Use ./configure_cuda to build/install SUNDIALS with ENABLE_CUDA=ON.
+#       - macOS has no CUDA environment; `make -n shud_cuda` is for syntax dry-run only.
 #			
 # -----------------------------------------------------------------
 # Configure this File:
@@ -37,12 +41,16 @@ LIB_SYS = /usr/local/lib/
 INC_OMP = /usr/local/opt/libomp/include
 LIB_OMP = /usr/local/opt/libomp/lib
 LIB_SUN = ${SUNDIALS_DIR}/lib
+CUDA_HOME ?= /usr/local/cuda
+INC_CUDA ?= ${CUDA_HOME}/include
+LIB_CUDA ?= ${CUDA_HOME}/lib64
 
 INC_MPI = /usr/local/opt/open-mpi
 
 TARGET_EXEC     = ${BUILDDIR}/shud
 TARGET_OMP      = ${BUILDDIR}/shud_omp
 TARGET_DEBUG    = ${BUILDDIR}/shud_debug
+TARGET_CUDA     = ${BUILDDIR}/shud_cuda
 
 MAIN_shud 		= ${SRC_DIR}/main.cpp
 MAIN_OMP 		= ${SRC_DIR}/main.cpp
@@ -56,6 +64,7 @@ MAIN_DEBUG 		= ${SRC_DIR}/main.cpp
 
 CC       = /usr/bin/g++
 MPICC    = /usr/local/bin/mpic++
+NVCC     ?= nvcc
 CFLAGS   = -O3 -g  -std=c++14
 #STCFLAG     = -static
 
@@ -83,14 +92,29 @@ LIBRARIES = -L ${LIB_OMP} \
 			-L ${LIB_SYS}
 
 RPATH = '-Wl,-rpath,${LIB_SUN}' 
+RPATH_CUDA = '-Wl,-rpath,${LIB_SUN}' '-Wl,-rpath,${LIB_CUDA}'
 
 LK_FLAGS = -lm -lsundials_cvode -lsundials_nvecserial
 LK_OMP	= -Xpreprocessor -fopenmp -lomp -lsundials_nvecopenmp
+LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lsundials_sunmemcuda -lcudart
 LK_DYLN = "LD_LIBRARY_PATH=${LIB_SUN}"
 
+# Default supported GPU architectures (sm_70/75/80/86).
+# Override at build time if needed, e.g.:
+#   make shud_cuda CUDA_GENCODE='-gencode arch=compute_80,code=sm_80'
+CUDA_GENCODE ?= -gencode arch=compute_70,code=sm_70 \
+			   -gencode arch=compute_75,code=sm_75 \
+			   -gencode arch=compute_80,code=sm_80 \
+			   -gencode arch=compute_86,code=sm_86
+
+# CUDA sources are optional; this expands to empty if src/GPU/*.cu does not exist yet.
+CUDA_SRC = $(wildcard ${SRC_DIR}/GPU/*.cu)
+
+.PHONY: all check help cvode CVODE shud SHUD shud_omp shud_cuda clean
+
 all:
-	make clean
-	make shud
+	$(MAKE) clean
+	$(MAKE) shud
 	@echo
 check:
 	ls ${SUNDIALS_DIR}
@@ -100,10 +124,11 @@ check:
 help:
 	@(echo)
 	@echo "Usage:"
-	@(echo '       make all	    	- make both shud and shud_omp')
+	@(echo '       make all	    	- clean and make shud')
 	@(echo '       make cvode	    - install SUNDIALS/CVODE to ~/sundials')
 	@(echo '       make shud     	- make shud executable')
 	@(echo '       make shud_omp    - make shud_omp with OpenMP support')
+	@(echo '       make shud_cuda   - make shud_cuda with CUDA (NVECTOR_CUDA) support')
 	@(echo)
 	@(echo '       make clean    	- remove all executable files')
 	@(echo)
@@ -135,6 +160,16 @@ shud_omp: ${MAIN_OMP}  $(SRC) $(SRC_H)
 	@echo
 	@echo
 
+shud_cuda: ${MAIN_shud} $(SRC) $(SRC_H) $(CUDA_SRC)
+	@echo '...Compiling shud_CUDA (NVECTOR_CUDA) ...'
+	@echo $(NVCC) $(CFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
+	@echo
+	@echo
+	$(NVCC) $(CFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
+	@echo
+	@echo " ${TARGET_CUDA} is compiled successfully!"
+	@echo
+
 clean:
 	@echo "Cleaning ... "
 	@echo
@@ -146,12 +181,13 @@ clean:
 	
 	@echo "  rm -f ${TARGET_OMP}"
 	@rm -f ${TARGET_OMP}
-	
+
+	@echo "  rm -f ${TARGET_CUDA}"
+	@rm -f ${TARGET_CUDA}
+		
 	@echo
 	@echo "Done."
 	@echo
-
-
 
 
 

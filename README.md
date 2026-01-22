@@ -71,6 +71,20 @@ cd SHUD
 
 This configure is to download the SUNDIALS from GitHub and install it on your computer.
 
+**Optional: CUDA-enabled build (Linux + NVIDIA CUDA Toolkit only)**
+
+If you want to build with CUDA (SUNDIALS `NVECTOR_CUDA`), first install a CUDA-enabled SUNDIALS:
+
+```bash
+SUNDIALS_PREFIX="$HOME/sundials" CUDA_ARCHS="70;75;80;86" ./configure_cuda
+```
+
+Then build SHUD with NVCC:
+
+```bash
+make shud_cuda CUDA_HOME=/usr/local/cuda
+```
+
 **Step 2: Compile SHUD with gcc**
 
 ```

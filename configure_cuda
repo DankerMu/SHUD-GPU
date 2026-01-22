@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# configure_cuda
+#   Build & install SUNDIALS/CVODE with CUDA (NVECTOR_CUDA).
+#
+# NOTE:
+#   - This script must be run on a CUDA-capable system (Linux HPC / workstation).
+#   - macOS does NOT provide a CUDA environment; keep this script for reference/CI only.
+#
+# Requirements on the build machine:
+#   - NVIDIA CUDA Toolkit (nvcc in PATH)
+#   - CMake >= 3.18 (for CMAKE_CUDA_ARCHITECTURES)
+#
+# Customization (env vars):
+#   - SUNDIALS_PREFIX : install prefix (default: $HOME/sundials)
+#   - CUDA_ARCHS      : CMake CUDA arch list (default: 70;75;80;86)
+#     Examples: "80" or "70;75;80;86"
+#
+set -euo pipefail
+
+SUNDIALS_PREFIX="${SUNDIALS_PREFIX:-${HOME}/sundials}"
+CUDA_ARCHS="${CUDA_ARCHS:-70;75;80;86}"
+
+installPath="InstallSundialsCUDA"
+tarball="cvode-6.0.0.tar.gz"
+srcdir="cvode-6.0.0"
+url="https://github.com/LLNL/sundials/releases/download/v6.0.0/${tarball}"
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "${script_dir}"
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+echo "Trying to download and install SUNDIALS/CVODE with CUDA (NVECTOR_CUDA)."
+echo ""
+echo "Install prefix: ${SUNDIALS_PREFIX}"
+echo "CUDA archs    : ${CUDA_ARCHS}"
+echo ""
+
+rm -rf "${installPath}"
+
+require_cmd cmake
+require_cmd tar
+require_cmd nvcc
+
+if [ ! -f "${tarball}" ]; then
+  echo "Downloading ${tarball}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL "${url}" -o "${tarball}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -c "${url}" -O "${tarball}"
+  else
+    echo "ERROR: need curl or wget to download ${tarball}"
+    exit 1
+  fi
+fi
+
+rm -rf "${installPath}/src"
+mkdir -p "${installPath}/src"
+
+echo "Extract ${tarball} -> ${installPath}/src"
+tar -xzf "${tarball}" -C "${installPath}/src"
+
+builddir="${installPath}/builddir"
+mkdir -p "${builddir}"
+
+echo "start configure...."
+cmake -S "${installPath}/src/${srcdir}" -B "${builddir}" \
+  -DCMAKE_INSTALL_PREFIX="${SUNDIALS_PREFIX}" \
+  -DEXAMPLES_INSTALL_PATH="${SUNDIALS_PREFIX}/example" \
+  -DBUILD_CVODE=ON \
+  -DBUILD_CVODES=OFF \
+  -DBUILD_ARKODE=OFF \
+  -DBUILD_IDA=OFF \
+  -DBUILD_IDAS=OFF \
+  -DBUILD_KINSOL=OFF \
+  -DOPENMP_ENABLE=ON \
+  -DENABLE_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}"
+
+echo "build"
+cmake --build "${builddir}" --parallel
+
+echo "install"
+cmake --install "${builddir}"
+
+echo ""
+echo "Done."
+echo "Verify CUDA NVECTOR library exists:"
+echo "  ls \"${SUNDIALS_PREFIX}/lib\" | grep -E 'nveccuda|sunmemcuda' || true"

@@ -120,6 +120,14 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.bathy_yi);
     cudaFreeIfNotNull(h.bathy_ai);
 
+    cudaFreeIfNotNull(h.qEleNetPrep);
+    cudaFreeIfNotNull(h.qPotEvap);
+    cudaFreeIfNotNull(h.qPotTran);
+    cudaFreeIfNotNull(h.qEleE_IC);
+    cudaFreeIfNotNull(h.t_lai);
+    cudaFreeIfNotNull(h.fu_Surf);
+    cudaFreeIfNotNull(h.fu_Sub);
+
     cudaFreeIfNotNull(h.qEleInfil);
     cudaFreeIfNotNull(h.qEleExfil);
     cudaFreeIfNotNull(h.qEleRecharge);
@@ -162,6 +170,8 @@ void gpuInit(Model_Data *md)
         gpuFree(md);
     }
 
+    cudaStream_t stream = nullptr;
+    cudaEvent_t forcing_event = nullptr;
     DeviceModel h{};
     h.NumEle = md->NumEle;
     h.NumRiv = md->NumRiv;
@@ -169,6 +179,21 @@ void gpuInit(Model_Data *md)
     h.NumLake = md->NumLake;
 
     cudaError_t err = cudaSuccess;
+
+    err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+        stream = nullptr;
+        fprintf(stderr, "gpuInit: failed to create CUDA stream\n");
+        goto fail;
+    }
+    err = cudaEventCreateWithFlags(&forcing_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        forcing_event = nullptr;
+        fprintf(stderr, "gpuInit: failed to create CUDA event\n");
+        goto fail;
+    }
+    md->cuda_stream = stream;
+    md->forcing_copy_event = forcing_event;
 
     /* ------------------------------ Element static parameters ------------------------------ */
     std::vector<double> ele_area(h.NumEle);
@@ -768,6 +793,51 @@ void gpuInit(Model_Data *md)
         }
     }
 
+    /* ------------------------------ Forcing arrays ------------------------------ */
+    err = cudaAllocAndUpload(&h.qEleNetPrep, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate qEleNetPrep\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.qPotEvap, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate qPotEvap\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.qPotTran, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate qPotTran\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.qEleE_IC, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate qEleE_IC\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.t_lai, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate t_lai\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.fu_Surf, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate fu_Surf\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.fu_Sub, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate fu_Sub\n");
+        goto fail;
+    }
+
+    md->d_qEleNetPrep = h.qEleNetPrep;
+    md->d_qPotEvap = h.qPotEvap;
+    md->d_qPotTran = h.qPotTran;
+    md->d_qEleE_IC = h.qEleE_IC;
+    md->d_t_lai = h.t_lai;
+    md->d_fu_Surf = h.fu_Surf;
+    md->d_fu_Sub = h.fu_Sub;
+
     /* Finally: allocate & upload the DeviceModel itself. */
     err = cudaMalloc(reinterpret_cast<void **>(&md->d_model), sizeof(DeviceModel));
     if (err != cudaSuccess) {
@@ -782,6 +852,14 @@ void gpuInit(Model_Data *md)
     return;
 
 fail:
+    if (forcing_event != nullptr) {
+        (void)cudaEventDestroy(forcing_event);
+        md->forcing_copy_event = nullptr;
+    }
+    if (stream != nullptr) {
+        (void)cudaStreamDestroy(stream);
+        md->cuda_stream = nullptr;
+    }
     freeDeviceBuffers(h);
     if (md->d_model != nullptr) {
         cudaFreeIfNotNull(md->d_model);
@@ -792,7 +870,31 @@ fail:
 
 void gpuFree(Model_Data *md)
 {
-    if (md == nullptr || md->d_model == nullptr) {
+    if (md == nullptr) {
+        return;
+    }
+
+    if (md->cuda_stream != nullptr) {
+        (void)cudaStreamSynchronize(md->cuda_stream);
+    }
+    if (md->forcing_copy_event != nullptr) {
+        (void)cudaEventDestroy(md->forcing_copy_event);
+        md->forcing_copy_event = nullptr;
+    }
+    if (md->cuda_stream != nullptr) {
+        (void)cudaStreamDestroy(md->cuda_stream);
+        md->cuda_stream = nullptr;
+    }
+
+    md->d_qEleNetPrep = nullptr;
+    md->d_qPotEvap = nullptr;
+    md->d_qPotTran = nullptr;
+    md->d_qEleE_IC = nullptr;
+    md->d_t_lai = nullptr;
+    md->d_fu_Surf = nullptr;
+    md->d_fu_Sub = nullptr;
+
+    if (md->d_model == nullptr) {
         return;
     }
 
@@ -803,6 +905,64 @@ void gpuFree(Model_Data *md)
     freeDeviceBuffers(h);
     cudaFreeIfNotNull(md->d_model);
     md->d_model = nullptr;
+}
+
+void Model_Data::gpuUpdateForcing()
+{
+    if (d_model == nullptr) {
+        return;
+    }
+    if (NumEle <= 0) {
+        return;
+    }
+    if (cuda_stream == nullptr) {
+        fprintf(stderr, "gpuUpdateForcing: cuda_stream is not initialized\n");
+        std::abort();
+    }
+    if (forcing_copy_event == nullptr) {
+        fprintf(stderr, "gpuUpdateForcing: forcing_copy_event is not initialized\n");
+        std::abort();
+    }
+
+    cudaStream_t stream = cuda_stream;
+    const size_t bytes = static_cast<size_t>(NumEle) * sizeof(double);
+
+    cudaError_t err = cudaMemcpyAsync(d_qEleNetPrep, qEleNetPrep, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(qEleNetPrep)");
+    err = cudaMemcpyAsync(d_qPotEvap, qPotEvap, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(qPotEvap)");
+    err = cudaMemcpyAsync(d_qPotTran, qPotTran, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(qPotTran)");
+    err = cudaMemcpyAsync(d_qEleE_IC, qEleE_IC, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(qEleE_IC)");
+    err = cudaMemcpyAsync(d_t_lai, t_lai, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(t_lai)");
+    err = cudaMemcpyAsync(d_fu_Surf, fu_Surf, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(fu_Surf)");
+    err = cudaMemcpyAsync(d_fu_Sub, fu_Sub, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(fu_Sub)");
+
+    err = cudaEventRecord(forcing_copy_event, stream);
+    cudaDie(err, "gpuUpdateForcing(cudaEventRecord)");
+
+    nGpuForcingCopy++;
+}
+
+void Model_Data::gpuWaitForcingCopy()
+{
+    if (d_model == nullptr) {
+        return;
+    }
+    if (nGpuForcingCopy == 0) {
+        return;
+    }
+    if (forcing_copy_event == nullptr) {
+        fprintf(stderr, "gpuWaitForcingCopy: forcing_copy_event is not initialized\n");
+        std::abort();
+    }
+
+    const cudaError_t err = cudaEventSynchronize(forcing_copy_event);
+    cudaDie(err, "gpuWaitForcingCopy(cudaEventSynchronize)");
 }
 
 #endif /* _CUDA_ON */

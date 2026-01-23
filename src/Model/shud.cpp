@@ -184,6 +184,11 @@ double SHUD(FileIn *fin, FileOut *fout){
             MD->updateforcing(t);
             /* calculate Interception Storage */
             MD->ET(t, tout);
+#ifdef _CUDA_ON
+            if (N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA) {
+                MD->gpuUpdateForcing();
+            }
+#endif
             if (dummy_mode) {
                 t = tout; /* dummy mode only. */
             } else {

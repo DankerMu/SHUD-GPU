@@ -78,6 +78,15 @@ struct DeviceModel {
     double *bathy_yi = nullptr;
     double *bathy_ai = nullptr;
 
+    /* Forcing arrays (updated per forcing step) */
+    double *qEleNetPrep = nullptr;
+    double *qPotEvap = nullptr;
+    double *qPotTran = nullptr;
+    double *qEleE_IC = nullptr;
+    double *t_lai = nullptr;
+    double *fu_Surf = nullptr;
+    double *fu_Sub = nullptr;
+
     /* Scratch arrays (reused for each RHS evaluation) */
     double *qEleInfil = nullptr;
     double *qEleExfil = nullptr;

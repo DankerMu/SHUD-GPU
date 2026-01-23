@@ -1,5 +1,8 @@
 #include "Model_Data.hpp"
 #include "is_sm_et.hpp"
+#ifdef _CUDA_ON
+#include "DeviceContext.hpp"
+#endif
 
 Model_Data::Model_Data(){
 }
@@ -17,6 +20,20 @@ void Model_Data::TimeSpent(){
     double dt = toc - tic;
     screeninfo("\n\tNumber of calls of f function:\t %ld \n", nFCall);
     printf("\n\tTime used by model:\t %.3f seconds.\n", dt);
+#ifdef _CUDA_ON
+    if (d_model != nullptr) {
+        screeninfo("\n\tNumber of forcing steps:\t %lu \n", nForcingStep);
+        screeninfo("\tNumber of forcing H2D copies:\t %lu \n", nGpuForcingCopy);
+        if (nForcingStep != nGpuForcingCopy) {
+            fprintf(stderr,
+                    "\nERROR: forcing H2D copy count (%lu) does not match forcing steps (%lu)\n\n",
+                    nGpuForcingCopy,
+                    nForcingStep);
+            gpuFree(this);
+            myexit(-1);
+        }
+    }
+#endif
     screeninfo("\n\nThe successful end. \n\n");
     
 #else
@@ -25,6 +42,20 @@ void Model_Data::TimeSpent(){
     screeninfo("\n\tNumber of calls of f function:\t %ld \n", nFCall);
 //    screeninfo("\n\tNumber of calls of f function:\t %ld \n", nFCall2);
     screeninfo("\n\tTime used by model:\t %.3f seconds.\n", dt);
+#ifdef _CUDA_ON
+    if (d_model != nullptr) {
+        screeninfo("\n\tNumber of forcing steps:\t %lu \n", nForcingStep);
+        screeninfo("\tNumber of forcing H2D copies:\t %lu \n", nGpuForcingCopy);
+        if (nForcingStep != nGpuForcingCopy) {
+            fprintf(stderr,
+                    "\nERROR: forcing H2D copy count (%lu) does not match forcing steps (%lu)\n\n",
+                    nGpuForcingCopy,
+                    nForcingStep);
+            gpuFree(this);
+            myexit(-1);
+        }
+    }
+#endif
     screeninfo("\n\nThe successful end. \n\n");
 #endif
     

@@ -9,6 +9,12 @@
 #include "Model_Data.hpp"
 void Model_Data::updateforcing(double t){
     int i;
+#ifdef _CUDA_ON
+    nForcingStep++;
+    if (d_model != nullptr) {
+        gpuWaitForcingCopy();
+    }
+#endif
     for(i = 0; i < NumEle; i++){
         Ele[i].updateElement(uYsf[i], uYus[i], uYgw[i]);
         tReadForcing(t,i);

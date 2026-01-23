@@ -23,6 +23,10 @@
 #include "Macros.hpp"
 #include "AccTemperature.hpp"
 
+#ifdef _CUDA_ON
+#include <cuda_runtime_api.h>
+#endif
+
 /* GPU device-side SoA model (allocated in src/GPU/DeviceContext.cu). */
 struct DeviceModel;
 using namespace std;
@@ -198,7 +202,8 @@ public:
     TimeContext Time;
     DeviceModel *d_model = nullptr;
 #ifdef _CUDA_ON
-    void *cuda_stream = nullptr;
+    cudaStream_t cuda_stream = nullptr;
+    cudaEvent_t forcing_copy_event = nullptr;
     double *d_qEleNetPrep = nullptr;
     double *d_qPotEvap = nullptr;
     double *d_qPotTran = nullptr;
@@ -283,6 +288,7 @@ public:
     void updateforcing(double t);
 #ifdef _CUDA_ON
     void gpuUpdateForcing();
+    void gpuWaitForcingCopy();
 #endif
     double getArea();
     void PassValue();

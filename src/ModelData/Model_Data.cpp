@@ -1,5 +1,8 @@
 #include "Model_Data.hpp"
 #include "is_sm_et.hpp"
+#ifdef _CUDA_ON
+#include "DeviceContext.hpp"
+#endif
 
 Model_Data::Model_Data(){
 }
@@ -26,6 +29,7 @@ void Model_Data::TimeSpent(){
                     "\nERROR: forcing H2D copy count (%lu) does not match forcing steps (%lu)\n\n",
                     nGpuForcingCopy,
                     nForcingStep);
+            gpuFree(this);
             myexit(-1);
         }
     }
@@ -47,6 +51,7 @@ void Model_Data::TimeSpent(){
                     "\nERROR: forcing H2D copy count (%lu) does not match forcing steps (%lu)\n\n",
                     nGpuForcingCopy,
                     nForcingStep);
+            gpuFree(this);
             myexit(-1);
         }
     }

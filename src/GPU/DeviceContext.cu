@@ -171,6 +171,7 @@ void gpuInit(Model_Data *md)
     }
 
     cudaStream_t stream = nullptr;
+    cudaEvent_t forcing_event = nullptr;
     DeviceModel h{};
     h.NumEle = md->NumEle;
     h.NumRiv = md->NumRiv;
@@ -181,10 +182,18 @@ void gpuInit(Model_Data *md)
 
     err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
     if (err != cudaSuccess) {
+        stream = nullptr;
         fprintf(stderr, "gpuInit: failed to create CUDA stream\n");
         goto fail;
     }
-    md->cuda_stream = reinterpret_cast<void *>(stream);
+    err = cudaEventCreateWithFlags(&forcing_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        forcing_event = nullptr;
+        fprintf(stderr, "gpuInit: failed to create CUDA event\n");
+        goto fail;
+    }
+    md->cuda_stream = stream;
+    md->forcing_copy_event = forcing_event;
 
     /* ------------------------------ Element static parameters ------------------------------ */
     std::vector<double> ele_area(h.NumEle);
@@ -843,6 +852,10 @@ void gpuInit(Model_Data *md)
     return;
 
 fail:
+    if (forcing_event != nullptr) {
+        (void)cudaEventDestroy(forcing_event);
+        md->forcing_copy_event = nullptr;
+    }
     if (stream != nullptr) {
         (void)cudaStreamDestroy(stream);
         md->cuda_stream = nullptr;
@@ -862,9 +875,14 @@ void gpuFree(Model_Data *md)
     }
 
     if (md->cuda_stream != nullptr) {
-        cudaStream_t stream = reinterpret_cast<cudaStream_t>(md->cuda_stream);
-        (void)cudaStreamSynchronize(stream);
-        (void)cudaStreamDestroy(stream);
+        (void)cudaStreamSynchronize(md->cuda_stream);
+    }
+    if (md->forcing_copy_event != nullptr) {
+        (void)cudaEventDestroy(md->forcing_copy_event);
+        md->forcing_copy_event = nullptr;
+    }
+    if (md->cuda_stream != nullptr) {
+        (void)cudaStreamDestroy(md->cuda_stream);
         md->cuda_stream = nullptr;
     }
 
@@ -901,8 +919,12 @@ void Model_Data::gpuUpdateForcing()
         fprintf(stderr, "gpuUpdateForcing: cuda_stream is not initialized\n");
         std::abort();
     }
+    if (forcing_copy_event == nullptr) {
+        fprintf(stderr, "gpuUpdateForcing: forcing_copy_event is not initialized\n");
+        std::abort();
+    }
 
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+    cudaStream_t stream = cuda_stream;
     const size_t bytes = static_cast<size_t>(NumEle) * sizeof(double);
 
     cudaError_t err = cudaMemcpyAsync(d_qEleNetPrep, qEleNetPrep, bytes, cudaMemcpyHostToDevice, stream);
@@ -920,7 +942,27 @@ void Model_Data::gpuUpdateForcing()
     err = cudaMemcpyAsync(d_fu_Sub, fu_Sub, bytes, cudaMemcpyHostToDevice, stream);
     cudaDie(err, "gpuUpdateForcing(fu_Sub)");
 
+    err = cudaEventRecord(forcing_copy_event, stream);
+    cudaDie(err, "gpuUpdateForcing(cudaEventRecord)");
+
     nGpuForcingCopy++;
+}
+
+void Model_Data::gpuWaitForcingCopy()
+{
+    if (d_model == nullptr) {
+        return;
+    }
+    if (nGpuForcingCopy == 0) {
+        return;
+    }
+    if (forcing_copy_event == nullptr) {
+        fprintf(stderr, "gpuWaitForcingCopy: forcing_copy_event is not initialized\n");
+        std::abort();
+    }
+
+    const cudaError_t err = cudaEventSynchronize(forcing_copy_event);
+    cudaDie(err, "gpuWaitForcingCopy(cudaEventSynchronize)");
 }
 
 #endif /* _CUDA_ON */

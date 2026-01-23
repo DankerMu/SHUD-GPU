@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <limits>
 
 #ifdef DEBUG_GPU_VERIFY
 #include "gpu_verify.hpp"
@@ -104,7 +105,8 @@ static void printFirstMismatches(const char *kernel,
                                  const CpuT *cpu,
                                  const GpuT *gpu,
                                  size_t n,
-                                 IndexHintKind hintKind)
+                                 IndexHintKind hintKind,
+                                 size_t index_base)
 {
     if (ctx.settings.max_print <= 0 || cpu == nullptr || gpu == nullptr || n == 0) {
         return;
@@ -114,21 +116,40 @@ static void printFirstMismatches(const char *kernel,
     for (size_t i = 0; i < n && printed < ctx.settings.max_print; i++) {
         const double c = static_cast<double>(cpu[i]);
         const double g = static_cast<double>(gpu[i]);
-        const double diff = (c > g) ? (c - g) : (g - c);
-        const double ac = (c >= 0.0) ? c : -c;
-        const double ag = (g >= 0.0) ? g : -g;
-        const double denom = (ac > ag) ? ac : ag;
-        const double thr = (ctx.settings.atol > ctx.settings.rtol * denom) ? ctx.settings.atol : (ctx.settings.rtol * denom);
-        if (diff <= thr) {
+        const bool c_nan = std::isnan(c);
+        const bool g_nan = std::isnan(g);
+        const bool c_inf = std::isinf(c);
+        const bool g_inf = std::isinf(g);
+
+        bool mismatch = false;
+        double diff = 0.0;
+        double thr = 0.0;
+        if (c_nan || g_nan) {
+            mismatch = true;
+            diff = std::numeric_limits<double>::infinity();
+        } else if (c_inf || g_inf) {
+            mismatch = !(c_inf && g_inf && (std::signbit(c) == std::signbit(g)));
+            if (mismatch) {
+                diff = std::numeric_limits<double>::infinity();
+            }
+        } else {
+            diff = std::fabs(c - g);
+            const double denom = std::fmax(std::fabs(c), std::fabs(g));
+            thr = std::fmax(ctx.settings.atol, ctx.settings.rtol * denom);
+            mismatch = diff > thr;
+        }
+
+        if (!mismatch) {
             continue;
         }
 
-        const std::string hint = indexHint(hintKind, ctx, i);
+        const size_t report_idx = (hintKind == IndexHintKind::DYdot) ? (index_base + i) : i;
+        const std::string hint = indexHint(hintKind, ctx, report_idx);
         fprintf(stderr,
                 "[GPU_VERIFY]   kernel=%s field=%s idx=%zu%s cpu=%.10g gpu=%.10g diff=%.6e thr=%.6e\n",
                 (kernel != nullptr) ? kernel : "(unknown)",
                 (field != nullptr) ? field : "(unknown)",
-                i,
+                report_idx,
                 hint.c_str(),
                 c,
                 g,
@@ -145,16 +166,21 @@ static bool compareAndReport(const char *kernel,
                              const CpuT *cpu,
                              const GpuT *gpu,
                              size_t n,
-                             IndexHintKind hintKind)
+                             IndexHintKind hintKind,
+                             size_t index_base)
 {
     const CompareResult r = compare_arrays(cpu, gpu, n, ctx.settings.atol, ctx.settings.rtol);
     if (r.mismatch_count == 0) {
         return true;
     }
 
-    const std::string hint = indexHint(hintKind, ctx, r.max_idx);
-    gpuVerifyReport(stderr, kernel, field, ctx, r, hint.c_str());
-    printFirstMismatches(kernel, field, ctx, cpu, gpu, n, hintKind);
+    CompareResult report = r;
+    if (hintKind == IndexHintKind::DYdot) {
+        report.max_idx += index_base;
+    }
+    const std::string hint = indexHint(hintKind, ctx, report.max_idx);
+    gpuVerifyReport(stderr, kernel, field, ctx, report, hint.c_str());
+    printFirstMismatches(kernel, field, ctx, cpu, gpu, n, hintKind, index_base);
 
     if (ctx.settings.abort_on_mismatch) {
         std::abort();
@@ -1042,18 +1068,18 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYsf", ctx, ctx.cpu_uYsf, h_uYsf.data(), h_uYsf.size(), IndexHintKind::Ele);
+            (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYsf", ctx, ctx.cpu_uYsf, h_uYsf.data(), h_uYsf.size(), IndexHintKind::Ele, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYus", ctx, ctx.cpu_uYus, h_uYus.data(), h_uYus.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYus", ctx, ctx.cpu_uYus, h_uYus.data(), h_uYus.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYgw", ctx, ctx.cpu_uYgw, h_uYgw.data(), h_uYgw.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYgw", ctx, ctx.cpu_uYgw, h_uYgw.data(), h_uYgw.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYriv", ctx, ctx.cpu_uYriv, h_uYriv.data(), h_uYriv.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYriv", ctx, ctx.cpu_uYriv, h_uYriv.data(), h_uYriv.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYlake", ctx, ctx.cpu_yLakeStg, h_uYlake.data(), h_uYlake.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYlake", ctx, ctx.cpu_yLakeStg, h_uYlake.data(), h_uYlake.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1084,36 +1110,36 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_local", "qEleInfil", ctx, ctx.cpu_qEleInfil, h_qi.data(), h_qi.size(), IndexHintKind::Ele);
+            (void)compareAndReport("k_ele_local", "qEleInfil", ctx, ctx.cpu_qEleInfil, h_qi.data(), h_qi.size(), IndexHintKind::Ele, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEleExfil", ctx, ctx.cpu_qEleExfil, h_qex.data(), h_qex.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qEleExfil", ctx, ctx.cpu_qEleExfil, h_qex.data(), h_qex.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEleRecharge", ctx, ctx.cpu_qEleRecharge, h_qr.data(), h_qr.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qEleRecharge", ctx, ctx.cpu_qEleRecharge, h_qr.data(), h_qr.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEs", ctx, ctx.cpu_qEs, h_qEs.data(), h_qEs.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qEs", ctx, ctx.cpu_qEs, h_qEs.data(), h_qEs.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEu", ctx, ctx.cpu_qEu, h_qEu.data(), h_qEu.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qEu", ctx, ctx.cpu_qEu, h_qEu.data(), h_qEu.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEg", ctx, ctx.cpu_qEg, h_qEg.data(), h_qEg.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qEg", ctx, ctx.cpu_qEg, h_qEg.data(), h_qEg.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qTu", ctx, ctx.cpu_qTu, h_qTu.data(), h_qTu.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qTu", ctx, ctx.cpu_qTu, h_qTu.data(), h_qTu.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qTg", ctx, ctx.cpu_qTg, h_qTg.data(), h_qTg.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "qTg", ctx, ctx.cpu_qTg, h_qTg.data(), h_qTg.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "ele_satn", ctx, ctx.cpu_ele_satn, h_satn.data(), h_satn.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "ele_satn", ctx, ctx.cpu_ele_satn, h_satn.data(), h_satn.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "ele_effKH", ctx, ctx.cpu_ele_effKH, h_effKH.data(), h_effKH.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_ele_local", "ele_effKH", ctx, ctx.cpu_ele_effKH, h_effKH.data(), h_effKH.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qLakePrcp", ctx, ctx.cpu_qLakePrcp, h_qLakePrcp.data(), h_qLakePrcp.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_ele_local", "qLakePrcp", ctx, ctx.cpu_qLakePrcp, h_qLakePrcp.data(), h_qLakePrcp.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1134,9 +1160,9 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_edge_surface", "QeleSurf", ctx, ctx.cpu_QeleSurf, h_QeleSurf.data(), h_QeleSurf.size(), IndexHintKind::EleEdge3);
+            (void)compareAndReport("k_ele_edge_surface", "QeleSurf", ctx, ctx.cpu_QeleSurf, h_QeleSurf.data(), h_QeleSurf.size(), IndexHintKind::EleEdge3, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_edge_surface", "QLakeSurf", ctx, ctx.cpu_QLakeSurf, h_QLakeSurf.data(), h_QLakeSurf.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_ele_edge_surface", "QLakeSurf", ctx, ctx.cpu_QLakeSurf, h_QLakeSurf.data(), h_QLakeSurf.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1157,9 +1183,9 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_edge_sub", "QeleSub", ctx, ctx.cpu_QeleSub, h_QeleSub.data(), h_QeleSub.size(), IndexHintKind::EleEdge3);
+            (void)compareAndReport("k_ele_edge_sub", "QeleSub", ctx, ctx.cpu_QeleSub, h_QeleSub.data(), h_QeleSub.size(), IndexHintKind::EleEdge3, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_edge_sub", "QLakeSub", ctx, ctx.cpu_QLakeSub, h_QLakeSub.data(), h_QLakeSub.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_ele_edge_sub", "QLakeSub", ctx, ctx.cpu_QLakeSub, h_QLakeSub.data(), h_QLakeSub.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1181,15 +1207,15 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv);
+            (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele);
+                (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
             }
         }
     }
@@ -1215,21 +1241,21 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_river_down_and_up", "QrivDown", ctx, ctx.cpu_QrivDown, h_QrivDown.data(), h_QrivDown.size(), IndexHintKind::Riv);
+            (void)compareAndReport("k_river_down_and_up", "QrivDown", ctx, ctx.cpu_QrivDown, h_QrivDown.data(), h_QrivDown.size(), IndexHintKind::Riv, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "QrivUp", ctx, ctx.cpu_QrivUp, h_QrivUp.data(), h_QrivUp.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_river_down_and_up", "QrivUp", ctx, ctx.cpu_QrivUp, h_QrivUp.data(), h_QrivUp.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_topWidth", ctx, ctx.cpu_riv_topWidth, h_topWidth.data(), h_topWidth.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_river_down_and_up", "riv_topWidth", ctx, ctx.cpu_riv_topWidth, h_topWidth.data(), h_topWidth.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_CSarea", ctx, ctx.cpu_riv_CSarea, h_CSarea.data(), h_CSarea.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_river_down_and_up", "riv_CSarea", ctx, ctx.cpu_riv_CSarea, h_CSarea.data(), h_CSarea.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_CSperem", ctx, ctx.cpu_riv_CSperem, h_CSperem.data(), h_CSperem.size(), IndexHintKind::Riv);
+                (void)compareAndReport("k_river_down_and_up", "riv_CSperem", ctx, ctx.cpu_riv_CSperem, h_CSperem.data(), h_CSperem.size(), IndexHintKind::Riv, 0);
             }
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "QLakeRivIn", ctx, ctx.cpu_QLakeRivIn, h_QLakeRivIn.data(), h_QLakeRivIn.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_river_down_and_up", "QLakeRivIn", ctx, ctx.cpu_QLakeRivIn, h_QLakeRivIn.data(), h_QLakeRivIn.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1249,9 +1275,9 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake);
+            (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake, 0);
             if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake);
+                (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake, 0);
             }
         }
     }
@@ -1271,7 +1297,7 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot);
+            (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot, 0);
         }
     }
 #endif
@@ -1291,7 +1317,7 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot);
+            (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot, offset);
         }
     }
 #endif
@@ -1311,7 +1337,7 @@ void launch_rhs_kernels(realtype t,
         ok &= syncVerifyStream(stream);
         if (ok) {
             const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot);
+            (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot, offset);
         }
     }
 #endif

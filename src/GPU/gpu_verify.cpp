@@ -113,13 +113,14 @@ void gpuVerifyReport(FILE *out, const char *kernel, const char *field, const Gpu
 
     fprintf(out,
             "[GPU_VERIFY] step=%lu t=%.10g kernel=%s field=%s n=%zu mismatches=%zu "
-            "max_abs=%.6e max_rel=%.6e idx=%zu%s cpu=%.10g gpu=%.10g thr=%.6e (atol=%.3e rtol=%.3e)\n",
+            "worst_ratio=%.6e diff=%.6e rel=%.6e idx=%zu%s cpu=%.10g gpu=%.10g thr=%.6e (atol=%.3e rtol=%.3e)\n",
             ctx.step,
             ctx.t,
             kernel,
             field,
             r.n,
             r.mismatch_count,
+            r.worst_ratio,
             r.max_abs,
             r.max_rel,
             r.max_idx,

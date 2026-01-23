@@ -1,8 +1,10 @@
 #ifndef SHUD_GPU_VERIFY_HPP
 #define SHUD_GPU_VERIFY_HPP
 
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <limits>
 
 struct GpuVerifySettings {
     bool enabled = true;
@@ -22,6 +24,7 @@ struct CompareResult {
     size_t max_idx = 0;
     double max_abs = 0.0;
     double max_rel = 0.0;
+    double worst_ratio = 0.0;
     double cpu_value = 0.0;
     double gpu_value = 0.0;
     double threshold = 0.0;
@@ -36,36 +39,56 @@ CompareResult compare_arrays(const CpuT *cpu, const GpuT *gpu, size_t n, double 
         return r;
     }
 
-    size_t first_idx = 0;
-    bool have_first = false;
+    bool have_worst = false;
     for (size_t i = 0; i < n; i++) {
         const double c = static_cast<double>(cpu[i]);
         const double g = static_cast<double>(gpu[i]);
-        const double diff = (c > g) ? (c - g) : (g - c);
-        const double ac = (c >= 0.0) ? c : -c;
-        const double ag = (g >= 0.0) ? g : -g;
-        const double denom = (ac > ag) ? ac : ag;
-        const double thr = (atol > rtol * denom) ? atol : (rtol * denom);
-        if (diff > thr) {
+        const bool c_nan = std::isnan(c);
+        const bool g_nan = std::isnan(g);
+        const bool c_inf = std::isinf(c);
+        const bool g_inf = std::isinf(g);
+
+        bool mismatch = false;
+        double diff = 0.0;
+        double denom = 0.0;
+        double thr = 0.0;
+        double rel = 0.0;
+        double ratio = 0.0;
+
+        if (c_nan || g_nan) {
+            mismatch = true;
+            diff = std::numeric_limits<double>::infinity();
+            rel = std::numeric_limits<double>::infinity();
+            ratio = std::numeric_limits<double>::infinity();
+        } else if (c_inf || g_inf) {
+            mismatch = !(c_inf && g_inf && (std::signbit(c) == std::signbit(g)));
+            if (mismatch) {
+                diff = std::numeric_limits<double>::infinity();
+                rel = std::numeric_limits<double>::infinity();
+                ratio = std::numeric_limits<double>::infinity();
+            }
+        } else {
+            diff = std::fabs(c - g);
+            denom = std::fmax(std::fabs(c), std::fabs(g));
+            thr = std::fmax(atol, rtol * denom);
+            mismatch = diff > thr;
+            rel = (denom > 0.0) ? (diff / denom) : 0.0;
+            ratio = (thr > 0.0) ? (diff / thr) : ((diff > 0.0) ? std::numeric_limits<double>::infinity() : 0.0);
+        }
+
+        if (mismatch) {
             r.mismatch_count++;
-            if (!have_first) {
-                have_first = true;
-                first_idx = i;
+            if (!have_worst || ratio > r.worst_ratio) {
+                have_worst = true;
+                r.worst_ratio = ratio;
+                r.max_abs = diff;
+                r.max_rel = rel;
+                r.max_idx = i;
+                r.cpu_value = c;
+                r.gpu_value = g;
+                r.threshold = thr;
             }
         }
-
-        if (diff > r.max_abs) {
-            r.max_abs = diff;
-            r.max_idx = i;
-            r.cpu_value = c;
-            r.gpu_value = g;
-            r.threshold = thr;
-            r.max_rel = (denom > 0.0) ? (diff / denom) : 0.0;
-        }
-    }
-
-    if (!have_first && r.mismatch_count > 0) {
-        r.max_idx = first_idx;
     }
     return r;
 }
@@ -128,4 +151,3 @@ struct GpuVerifyContext {
 void gpuVerifyReport(FILE *out, const char *kernel, const char *field, const GpuVerifyContext &ctx, const CompareResult &r, const char *index_hint);
 
 #endif /* SHUD_GPU_VERIFY_HPP */
-

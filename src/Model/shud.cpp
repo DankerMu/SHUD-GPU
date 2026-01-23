@@ -26,6 +26,7 @@ int dummy_mode = 0;
 int global_fflush_mode = 0;
 int global_implicit_mode = 1;
 int global_verbose_mode = 1;
+int global_backend = BACKEND_CPU;
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
@@ -78,39 +79,66 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->CheckInputData();
     fout->updateFilePath();
     NY = MD->NumY;
-#ifdef _CUDA_ON
-    screeninfo("\nCUDA: ON (NVECTOR_CUDA)\n");
-    udata = N_VNew_Cuda(NY, sunctx);
-    du = N_VNew_Cuda(NY, sunctx);
-    check_flag((void *)udata, "N_VNew_Cuda", 0);
-    check_flag((void *)du, "N_VNew_Cuda", 0);
 
-    /* Access device pointer to validate NVECTOR_CUDA data layout. */
-    if (N_VGetDeviceArrayPointer_Cuda(udata) == NULL) {
-        fprintf(stderr, "\nSUNDIALS_ERROR: N_VGetDeviceArrayPointer_Cuda() returned NULL\n\n");
-        myexit(ERRCVODE);
-    }
-    if (N_VIsManagedMemory_Cuda(udata)) {
-        screeninfo("WARNING: NVECTOR_CUDA is using managed memory (UVM).\n");
-    } else {
-        screeninfo("NVECTOR_CUDA memory: unmanaged device memory\n");
-    }
-#elif defined(_OPENMP_ON)
-    omp_set_num_threads(MD->CS.num_threads);
-    screeninfo("\nopenMP: ON. No of Threads = %d\n", MD->CS.num_threads);
-    udata = N_VNew_OpenMP(NY, MD->CS.num_threads, sunctx);
-    du = N_VNew_OpenMP(NY, MD->CS.num_threads, sunctx);
-#else
-    screeninfo("\nopenMP: OFF\n");
-    udata = N_VNew_Serial(NY, sunctx);
-    du = N_VNew_Serial(NY, sunctx);
+    const int nthreads = max(MD->CS.num_threads, 1);
+    switch (global_backend) {
+        case BACKEND_CPU:
+#ifdef _OPENMP_ON
+            /* Keep OpenMP-parallel code paths deterministic-ish when using the CPU backend. */
+            MD->CS.num_threads = 1;
+            omp_set_num_threads(1);
 #endif
+            screeninfo("\nBackend: cpu (NVECTOR_SERIAL)\n");
+            udata = N_VNew_Serial(NY, sunctx);
+            du = N_VNew_Serial(NY, sunctx);
+            break;
+        case BACKEND_OMP:
+#ifdef _OPENMP_ON
+            omp_set_num_threads(nthreads);
+            screeninfo("\nBackend: omp (NVECTOR_OPENMP). Threads = %d\n", nthreads);
+            udata = N_VNew_OpenMP(NY, nthreads, sunctx);
+            du = N_VNew_OpenMP(NY, nthreads, sunctx);
+            break;
+#else
+            fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
+            myexit(-1);
+#endif
+        case BACKEND_CUDA:
+#ifdef _CUDA_ON
+            screeninfo("\nBackend: cuda (NVECTOR_CUDA)\n");
+            udata = N_VNew_Cuda(NY, sunctx);
+            du = N_VNew_Cuda(NY, sunctx);
+            check_flag((void *)udata, "N_VNew_Cuda", 0);
+            check_flag((void *)du, "N_VNew_Cuda", 0);
+
+            /* Access device pointer to validate NVECTOR_CUDA data layout. */
+            if (N_VGetDeviceArrayPointer_Cuda(udata) == NULL) {
+                fprintf(stderr, "\nSUNDIALS_ERROR: N_VGetDeviceArrayPointer_Cuda() returned NULL\n\n");
+                myexit(ERRCVODE);
+            }
+            if (N_VIsManagedMemory_Cuda(udata)) {
+                screeninfo("WARNING: NVECTOR_CUDA is using managed memory (UVM).\n");
+            } else {
+                screeninfo("NVECTOR_CUDA memory: unmanaged device memory\n");
+            }
+            break;
+#else
+            fprintf(stderr, "\nERROR: --backend cuda requested, but this build does not enable CUDA (NVECTOR_CUDA).\n\n");
+            myexit(-1);
+#endif
+        default:
+            fprintf(stderr, "\nERROR: unknown backend=%d (expect cpu|omp|cuda).\n\n", global_backend);
+            myexit(-1);
+    }
+
     screeninfo("\nGlobal Implicit Mode: ON\n");
     MD->LoadIC();
     MD->SetIC2Y(udata);
 #ifdef _CUDA_ON
-    /* Initial conditions were set on host; sync to device for CVODE. */
-    N_VCopyToDevice_Cuda(udata);
+    if (N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA) {
+        /* Initial conditions were set on host; sync to device for CVODE. */
+        N_VCopyToDevice_Cuda(udata);
+    }
 #endif
     MD->initialize_output();
     MD->PrintInit(fout->Init_bak, 0);
@@ -164,8 +192,10 @@ double SHUD(FileIn *fin, FileOut *fout){
         }
         //            CVODEstatus(mem, udata, t);
 #ifdef _CUDA_ON
-        /* Sync state back to host for CPU-side summary/output. */
-        N_VCopyFromDevice_Cuda(udata);
+        if (N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA) {
+            /* Sync state back to host for CPU-side summary/output. */
+            N_VCopyFromDevice_Cuda(udata);
+        }
 #endif
         MD->summary(udata);
         MD->CS.ExportResults(t);
@@ -219,19 +249,60 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     N4 = MD->NumRiv;
     N5 = MD->NumLake;
 
-    screeninfo("\nopenMP: OFF\n");
+    const int nthreads = max(MD->CS.num_threads, 1);
+
+    if (global_backend == BACKEND_CUDA) {
+        fprintf(stderr,
+                "\nERROR: --backend cuda is not supported in uncoupled mode (-g). "
+                "Please run coupled mode or use --backend cpu/omp.\n\n");
+        myexit(-1);
+    }
+
+    if (global_backend == BACKEND_OMP) {
+#ifdef _OPENMP_ON
+        omp_set_num_threads(nthreads);
+        screeninfo("\nBackend: omp (NVECTOR_OPENMP). Threads = %d\n", nthreads);
+#else
+        fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
+        myexit(-1);
+#endif
+    } else {
+#ifdef _OPENMP_ON
+        MD->CS.num_threads = 1;
+        omp_set_num_threads(1);
+#endif
+        screeninfo("\nBackend: cpu (NVECTOR_SERIAL)\n");
+    }
+
     screeninfo("\nGlobal Implicit Mode: OFF\n");
-    u1 = N_VNew_Serial(N1,sunctx1);
-    u2 = N_VNew_Serial(N2,sunctx2);
-    u3 = N_VNew_Serial(N3,sunctx3);
-    u4 = N_VNew_Serial(N4,sunctx4);
-    u5 = N_VNew_Serial(N5,sunctx5);
-    
-    du1 = N_VNew_Serial(N1,sunctx1);
-    du2 = N_VNew_Serial(N2,sunctx2);
-    du3 = N_VNew_Serial(N3,sunctx3);
-    du4 = N_VNew_Serial(N4,sunctx4);
-    du5 = N_VNew_Serial(N5,sunctx5);
+
+    if (global_backend == BACKEND_OMP) {
+#ifdef _OPENMP_ON
+        u1 = N_VNew_OpenMP(N1, nthreads, sunctx1);
+        u2 = N_VNew_OpenMP(N2, nthreads, sunctx2);
+        u3 = N_VNew_OpenMP(N3, nthreads, sunctx3);
+        u4 = N_VNew_OpenMP(N4, nthreads, sunctx4);
+        u5 = N_VNew_OpenMP(N5, nthreads, sunctx5);
+
+        du1 = N_VNew_OpenMP(N1, nthreads, sunctx1);
+        du2 = N_VNew_OpenMP(N2, nthreads, sunctx2);
+        du3 = N_VNew_OpenMP(N3, nthreads, sunctx3);
+        du4 = N_VNew_OpenMP(N4, nthreads, sunctx4);
+        du5 = N_VNew_OpenMP(N5, nthreads, sunctx5);
+#endif
+    } else {
+        u1 = N_VNew_Serial(N1, sunctx1);
+        u2 = N_VNew_Serial(N2, sunctx2);
+        u3 = N_VNew_Serial(N3, sunctx3);
+        u4 = N_VNew_Serial(N4, sunctx4);
+        u5 = N_VNew_Serial(N5, sunctx5);
+
+        du1 = N_VNew_Serial(N1, sunctx1);
+        du2 = N_VNew_Serial(N2, sunctx2);
+        du3 = N_VNew_Serial(N3, sunctx3);
+        du4 = N_VNew_Serial(N4, sunctx4);
+        du5 = N_VNew_Serial(N5, sunctx5);
+    }
 
     MD->LoadIC();
     MD->SetIC2Y(u1, u2, u3, u4, u5);
@@ -386,6 +457,19 @@ int SHUD(int argc, char *argv[]){
     FileOut *fout = new FileOut;
     CLI.parse(argc, argv);
     CLI.setFileIO(fin, fout);
+
+    if (global_backend == BACKEND_OMP) {
+#ifndef _OPENMP_ON
+        fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
+        myexit(-1);
+#endif
+    } else if (global_backend == BACKEND_CUDA) {
+#ifndef _CUDA_ON
+        fprintf(stderr, "\nERROR: --backend cuda requested, but this build does not enable CUDA (NVECTOR_CUDA).\n\n");
+        myexit(-1);
+#endif
+    }
+
     if(global_implicit_mode){
         SHUD(fin, fout);
     }else{

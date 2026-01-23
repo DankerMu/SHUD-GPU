@@ -5,10 +5,12 @@
 //
 
 #include "CommandIn.hpp"
+#include <ctype.h>
 #include <errno.h>
+#include <getopt.h>
 void CommandIn::SHUD_help(void ){
     printf ("\n\nUsage:\n");
-    printf ("./shud [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] <project_name>\n\n");
+    printf ("./shud [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--help] <project_name>\n\n");
     printf (" -0 Dummy simulation. Load input and write output, but no calculation.\n");
     printf (" -f fflush for each time interval. fflush export data frequently, but slow down performance on cluster.\n");
     printf (" -g Sequential coupled Surface-Unsaturated-Saturated-River mode.\n");
@@ -18,6 +20,8 @@ void CommandIn::SHUD_help(void ){
     printf (" -o output folder. Default is output/projname.out\n");
     printf (" -p projectfile, which includes the path to input files and output path.\n");
     printf (" -n Number of threads to run with OpenMP. \n");
+    printf (" --backend Runtime backend selection: cpu (default), omp, cuda.\n");
+    printf (" --help Print this message and exit.\n");
 }
 
 void CommandIn::parse(int argc, char **argv){
@@ -25,7 +29,16 @@ void CommandIn::parse(int argc, char **argv){
         SHUD_help();
         myexit(ERRSUCCESS);
     }
-    while ((c = getopt (argc, argv, "0fgvC:c:e:n:o:p:")) != -1){
+
+    static struct option long_options[] = {
+        {"backend", required_argument, NULL, 1},
+        {"help", no_argument, NULL, 'h'},
+        {NULL, 0, NULL, 0},
+    };
+    int option_index = 0;
+
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "0fgvC:c:e:n:o:p:h", long_options, &option_index)) != -1){
         switch (c){
             case '0':
                 dummy_mode = 1;
@@ -71,11 +84,36 @@ void CommandIn::parse(int argc, char **argv){
                 strcpy(prjfile, optarg);
                 iprj = 1;
                 break;
+            case 'h':
+                SHUD_help();
+                myexit(ERRSUCCESS);
+                break;
+            case 1:
+                if (strcmp(optarg, "cpu") == 0) {
+                    global_backend = BACKEND_CPU;
+                } else if (strcmp(optarg, "omp") == 0) {
+                    global_backend = BACKEND_OMP;
+                } else if (strcmp(optarg, "cuda") == 0) {
+                    global_backend = BACKEND_CUDA;
+                } else {
+                    fprintf(stderr, "ERROR: invalid --backend '%s' (expect cpu|omp|cuda).\n", optarg);
+                    myexit(-1);
+                }
+                break;
             case '?':
                 if (optopt == 'C') {
                     fprintf(stderr, "ERROR: option -%c requires an argument (0=OFF, 1=ON).\n", optopt);
                 } else if (optopt == 'p' || optopt == 'c' || optopt == 'e' || optopt == 'n' || optopt == 'o') {
                     fprintf(stderr, "ERROR: option -%c requires an argument.\n", optopt);
+                } else if (optopt == 0) {
+                    const char *badopt = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
+                    if (badopt != NULL && strcmp(badopt, "--backend") == 0) {
+                        fprintf(stderr, "ERROR: option %s requires an argument (cpu|omp|cuda).\n", badopt);
+                    } else if (badopt != NULL) {
+                        fprintf(stderr, "ERROR: unknown option '%s'.\n", badopt);
+                    } else {
+                        fprintf(stderr, "ERROR: unknown option.\n");
+                    }
                 }
                 else if (isprint (optopt))
                     fprintf (stderr, "Unknown option `-%c'.\n", optopt);

@@ -2,7 +2,6 @@
 #define SHUD_GPU_NVTX_HPP
 
 #if defined(_CUDA_ON)
-#if defined(__has_include)
 #if __has_include(<nvtx3/nvtx3.hpp>)
 #include <nvtx3/nvtx3.hpp>
 #define SHUD_NVTX_BACKEND_NVTX3 1
@@ -11,10 +10,6 @@
 #define SHUD_NVTX_BACKEND_NVTX2 1
 #else
 #define SHUD_NVTX_BACKEND_NONE 1
-#endif
-#else
-#include <nvToolsExt.h>
-#define SHUD_NVTX_BACKEND_NVTX2 1
 #endif
 #else
 #define SHUD_NVTX_BACKEND_NONE 1
@@ -51,4 +46,3 @@ public:
 } // namespace shud_nvtx
 
 #endif /* SHUD_GPU_NVTX_HPP */
-

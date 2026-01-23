@@ -1022,8 +1022,6 @@ void launch_rhs_kernels(realtype t,
         return;
     }
 
-    shud_nvtx::scoped_range range("RHS");
-
     const int nEle = h_model->NumEle;
     const int nRiv = h_model->NumRiv;
     const int nSeg = h_model->NumSeg;

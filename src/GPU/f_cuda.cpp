@@ -60,7 +60,7 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
         }
     }
 
-    launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, rhs_stream);
+    launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, md->h_model, rhs_stream);
     {
         const cudaError_t err = cudaPeekAtLastError();
         if (err != cudaSuccess) {

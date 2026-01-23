@@ -165,6 +165,7 @@ double SHUD(FileIn *fin, FileOut *fout){
             }
 
             MD->updateAllTimeSeries(t);
+            MD->updateBC(t);
             MD->updateforcing(t);
             /* calculate Interception Storage */
             MD->ET(t, tout);

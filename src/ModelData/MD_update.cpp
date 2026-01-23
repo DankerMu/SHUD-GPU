@@ -39,6 +39,34 @@ void Model_Data::updateAllTimeSeries(double t_min)
     }
 }
 
+void Model_Data::updateBC(double t)
+{
+    for (int i = 0; i < NumEle; i++) {
+        if (Ele[i].iBC == 0) {
+            Ele[i].QBC = 0.0;
+            Ele[i].yBC = 0.0;
+        } else if (Ele[i].iBC > 0) {
+            Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
+            Ele[i].QBC = 0.0;
+        } else { /* Ele[i].iBC < 0: fixed flux */
+            Ele[i].QBC = tsd_eqBC.getX(t, -Ele[i].iBC);
+        }
+    }
+
+    for (int i = 0; i < NumRiv; i++) {
+        Riv[i].qBC = 0.0;
+        if (Riv[i].BC == 0) {
+            Riv[i].yBC = 0.0;
+        } else if (Riv[i].BC < 0) { /* fixed flux INTO river */
+            Riv[i].qBC = tsd_rqBC.getX(t, -Riv[i].BC);
+            Riv[i].yBC = 0.0;
+        } else { /* Riv[i].BC > 0: fixed stage */
+            Riv[i].yBC = tsd_ryBC.getX(t, Riv[i].BC);
+            Riv[i].qBC = 0.0;
+        }
+    }
+}
+
 void Model_Data::f_updatei(double  *Y, double *DY, double t, int flag){
     switch (flag) {
         case 1:

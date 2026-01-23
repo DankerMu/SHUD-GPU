@@ -9,6 +9,7 @@ struct DeviceModel {
     int NumSeg = 0;
     int NumLake = 0;
     int bathy_nTotal = 0;
+    int CloseBoundary = 0;
 
     /* Element static parameters */
     double *ele_area = nullptr;
@@ -22,6 +23,7 @@ struct DeviceModel {
     int *ele_nabrToMe = nullptr;  /* [NumEle * 3] */
     double *ele_edge = nullptr;   /* [NumEle * 3] */
     double *ele_Dist2Nabor = nullptr; /* [NumEle * 3] */
+    double *ele_Dist2Edge = nullptr;  /* [NumEle * 3] */
     double *ele_avgRough = nullptr;   /* [NumEle * 3] */
 
     double *ele_AquiferDepth = nullptr;
@@ -40,11 +42,13 @@ struct DeviceModel {
     double *ele_geo_vAreaF = nullptr;
     double *ele_macKsatH = nullptr;
     double *ele_macD = nullptr;
+    double *ele_RzD = nullptr;
     double *ele_VegFrac = nullptr;
     double *ele_ImpAF = nullptr;
     int *ele_iLake = nullptr;
     int *ele_iBC = nullptr;
     int *ele_iSS = nullptr;
+    double *ele_yBC = nullptr;
     double *ele_QBC = nullptr;
     double *ele_QSS = nullptr;
 
@@ -58,6 +62,11 @@ struct DeviceModel {
     double *riv_BottomWidth = nullptr;
     double *riv_BedSlope = nullptr;
     double *riv_rivRough = nullptr;
+    double *riv_avgRough = nullptr;
+    double *riv_Dist2DownStream = nullptr;
+    double *riv_KsatH = nullptr;
+    double *riv_BedThick = nullptr;
+    double *riv_yBC = nullptr;
     double *riv_qBC = nullptr;
     double *riv_zbed = nullptr;
     double *riv_zbank = nullptr;
@@ -79,6 +88,7 @@ struct DeviceModel {
     double *bathy_ai = nullptr;
 
     /* Forcing arrays (updated per forcing step) */
+    double *qElePrep = nullptr;
     double *qEleNetPrep = nullptr;
     double *qPotEvap = nullptr;
     double *qPotTran = nullptr;
@@ -88,6 +98,14 @@ struct DeviceModel {
     double *fu_Sub = nullptr;
 
     /* Scratch arrays (reused for each RHS evaluation) */
+    double *uYsf = nullptr;
+    double *uYus = nullptr;
+    double *uYgw = nullptr;
+    double *uYriv = nullptr;
+    double *uYlake = nullptr;
+    double *ele_satn = nullptr;
+    double *ele_effKH = nullptr;
+
     double *qEleInfil = nullptr;
     double *qEleExfil = nullptr;
     double *qEleRecharge = nullptr;
@@ -114,6 +132,10 @@ struct DeviceModel {
     double *qLakePrcp = nullptr;
     double *qLakeEvap = nullptr;
     double *y2LakeArea = nullptr;
+
+    double *riv_CSarea = nullptr;
+    double *riv_CSperem = nullptr;
+    double *riv_topWidth = nullptr;
 };
 
 #ifdef _CUDA_ON

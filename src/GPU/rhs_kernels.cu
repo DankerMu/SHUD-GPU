@@ -4,6 +4,7 @@
 
 #include "DeviceContext.hpp"
 #include "Macros.hpp"
+#include "Nvtx.hpp"
 
 #include <cuda_runtime.h>
 
@@ -1021,6 +1022,8 @@ void launch_rhs_kernels(realtype t,
         return;
     }
 
+    shud_nvtx::scoped_range range("RHS");
+
     const int nEle = h_model->NumEle;
     const int nRiv = h_model->NumRiv;
     const int nSeg = h_model->NumSeg;
@@ -1031,316 +1034,349 @@ void launch_rhs_kernels(realtype t,
     constexpr int kBlockSize = 256;
     const auto cap_blocks = [](int blocks) { return (blocks > 65535) ? 65535 : blocks; };
 
-    /* 0) memset / init (match CPU f_update semantics) */
-    if (nEle > 0) {
-        (void)cudaMemsetAsync(h_model->Qe2r_Surf, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->Qe2r_Sub, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
+    {
+        shud_nvtx::scoped_range stage_range("RHS/0_init");
+        /* 0) memset / init (match CPU f_update semantics) */
+        if (nEle > 0) {
+            (void)cudaMemsetAsync(h_model->Qe2r_Surf, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->Qe2r_Sub, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
+        }
+        if (nRiv > 0) {
+            (void)cudaMemsetAsync(h_model->QrivSurf, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->QrivSub, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->QrivUp, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
+        }
+        if (nLake > 0) {
+            (void)cudaMemsetAsync(h_model->QLakeSurf, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->QLakeSub, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->QLakeRivIn, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->QLakeRivOut, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->qLakePrcp, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+            (void)cudaMemsetAsync(h_model->qLakeEvap, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
+        }
+        (void)cudaMemsetAsync(dYdot, 0, static_cast<size_t>(nY) * sizeof(realtype), stream);
     }
-    if (nRiv > 0) {
-        (void)cudaMemsetAsync(h_model->QrivSurf, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->QrivSub, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->QrivUp, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-    }
-    if (nLake > 0) {
-        (void)cudaMemsetAsync(h_model->QLakeSurf, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->QLakeSub, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->QLakeRivIn, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->QLakeRivOut, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->qLakePrcp, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        (void)cudaMemsetAsync(h_model->qLakeEvap, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-    }
-    (void)cudaMemsetAsync(dYdot, 0, static_cast<size_t>(nY) * sizeof(realtype), stream);
 
-    /* 1) apply BC + sanitize */
-    if (nY > 0) {
-        const int blocks = cap_blocks((nY + kBlockSize - 1) / kBlockSize);
-        k_apply_bc_and_sanitize_state<<<blocks, kBlockSize, 0, stream>>>(dY, d_model, clamp_policy);
-    }
+    {
+        shud_nvtx::scoped_range stage_range("RHS/1_apply_bc");
+        /* 1) apply BC + sanitize */
+        if (nY > 0) {
+            const int blocks = cap_blocks((nY + kBlockSize - 1) / kBlockSize);
+            k_apply_bc_and_sanitize_state<<<blocks, kBlockSize, 0, stream>>>(dY, d_model, clamp_policy);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify)) {
-        std::vector<double> h_uYsf, h_uYus, h_uYgw, h_uYriv, h_uYlake;
-        bool ok = true;
-        ok &= queueD2H(h_uYsf, h_model->uYsf, static_cast<size_t>(nEle), stream, "uYsf");
-        ok &= queueD2H(h_uYus, h_model->uYus, static_cast<size_t>(nEle), stream, "uYus");
-        ok &= queueD2H(h_uYgw, h_model->uYgw, static_cast<size_t>(nEle), stream, "uYgw");
-        ok &= queueD2H(h_uYriv, h_model->uYriv, static_cast<size_t>(nRiv), stream, "uYriv");
-        ok &= queueD2H(h_uYlake, h_model->uYlake, static_cast<size_t>(nLake), stream, "uYlake");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYsf", ctx, ctx.cpu_uYsf, h_uYsf.data(), h_uYsf.size(), IndexHintKind::Ele, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYus", ctx, ctx.cpu_uYus, h_uYus.data(), h_uYus.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYgw", ctx, ctx.cpu_uYgw, h_uYgw.data(), h_uYgw.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYriv", ctx, ctx.cpu_uYriv, h_uYriv.data(), h_uYriv.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYlake", ctx, ctx.cpu_yLakeStg, h_uYlake.data(), h_uYlake.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify)) {
+            std::vector<double> h_uYsf, h_uYus, h_uYgw, h_uYriv, h_uYlake;
+            bool ok = true;
+            ok &= queueD2H(h_uYsf, h_model->uYsf, static_cast<size_t>(nEle), stream, "uYsf");
+            ok &= queueD2H(h_uYus, h_model->uYus, static_cast<size_t>(nEle), stream, "uYus");
+            ok &= queueD2H(h_uYgw, h_model->uYgw, static_cast<size_t>(nEle), stream, "uYgw");
+            ok &= queueD2H(h_uYriv, h_model->uYriv, static_cast<size_t>(nRiv), stream, "uYriv");
+            ok &= queueD2H(h_uYlake, h_model->uYlake, static_cast<size_t>(nLake), stream, "uYlake");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYsf", ctx, ctx.cpu_uYsf, h_uYsf.data(), h_uYsf.size(), IndexHintKind::Ele, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYus", ctx, ctx.cpu_uYus, h_uYus.data(), h_uYus.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYgw", ctx, ctx.cpu_uYgw, h_uYgw.data(), h_uYgw.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYriv", ctx, ctx.cpu_uYriv, h_uYriv.data(), h_uYriv.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYlake", ctx, ctx.cpu_yLakeStg, h_uYlake.data(), h_uYlake.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 2) element local */
-    if (nEle > 0) {
-        const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
-        k_ele_local<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/2_ele_local");
+        /* 2) element local */
+        if (nEle > 0) {
+            const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
+            k_ele_local<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_qi, h_qex, h_qr;
-        std::vector<double> h_qEs, h_qEu, h_qEg, h_qTu, h_qTg;
-        std::vector<double> h_satn, h_effKH, h_qLakePrcp;
-        bool ok = true;
-        ok &= queueD2H(h_qi, h_model->qEleInfil, static_cast<size_t>(nEle), stream, "qEleInfil");
-        ok &= queueD2H(h_qex, h_model->qEleExfil, static_cast<size_t>(nEle), stream, "qEleExfil");
-        ok &= queueD2H(h_qr, h_model->qEleRecharge, static_cast<size_t>(nEle), stream, "qEleRecharge");
-        ok &= queueD2H(h_qEs, h_model->qEs, static_cast<size_t>(nEle), stream, "qEs");
-        ok &= queueD2H(h_qEu, h_model->qEu, static_cast<size_t>(nEle), stream, "qEu");
-        ok &= queueD2H(h_qEg, h_model->qEg, static_cast<size_t>(nEle), stream, "qEg");
-        ok &= queueD2H(h_qTu, h_model->qTu, static_cast<size_t>(nEle), stream, "qTu");
-        ok &= queueD2H(h_qTg, h_model->qTg, static_cast<size_t>(nEle), stream, "qTg");
-        ok &= queueD2H(h_satn, h_model->ele_satn, static_cast<size_t>(nEle), stream, "ele_satn");
-        ok &= queueD2H(h_effKH, h_model->ele_effKH, static_cast<size_t>(nEle), stream, "ele_effKH");
-        ok &= queueD2H(h_qLakePrcp, h_model->qLakePrcp, static_cast<size_t>(nLake), stream, "qLakePrcp");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_local", "qEleInfil", ctx, ctx.cpu_qEleInfil, h_qi.data(), h_qi.size(), IndexHintKind::Ele, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEleExfil", ctx, ctx.cpu_qEleExfil, h_qex.data(), h_qex.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEleRecharge", ctx, ctx.cpu_qEleRecharge, h_qr.data(), h_qr.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEs", ctx, ctx.cpu_qEs, h_qEs.data(), h_qEs.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEu", ctx, ctx.cpu_qEu, h_qEu.data(), h_qEu.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qEg", ctx, ctx.cpu_qEg, h_qEg.data(), h_qEg.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qTu", ctx, ctx.cpu_qTu, h_qTu.data(), h_qTu.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qTg", ctx, ctx.cpu_qTg, h_qTg.data(), h_qTg.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "ele_satn", ctx, ctx.cpu_ele_satn, h_satn.data(), h_satn.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "ele_effKH", ctx, ctx.cpu_ele_effKH, h_effKH.data(), h_effKH.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_local", "qLakePrcp", ctx, ctx.cpu_qLakePrcp, h_qLakePrcp.data(), h_qLakePrcp.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_qi, h_qex, h_qr;
+            std::vector<double> h_qEs, h_qEu, h_qEg, h_qTu, h_qTg;
+            std::vector<double> h_satn, h_effKH, h_qLakePrcp;
+            bool ok = true;
+            ok &= queueD2H(h_qi, h_model->qEleInfil, static_cast<size_t>(nEle), stream, "qEleInfil");
+            ok &= queueD2H(h_qex, h_model->qEleExfil, static_cast<size_t>(nEle), stream, "qEleExfil");
+            ok &= queueD2H(h_qr, h_model->qEleRecharge, static_cast<size_t>(nEle), stream, "qEleRecharge");
+            ok &= queueD2H(h_qEs, h_model->qEs, static_cast<size_t>(nEle), stream, "qEs");
+            ok &= queueD2H(h_qEu, h_model->qEu, static_cast<size_t>(nEle), stream, "qEu");
+            ok &= queueD2H(h_qEg, h_model->qEg, static_cast<size_t>(nEle), stream, "qEg");
+            ok &= queueD2H(h_qTu, h_model->qTu, static_cast<size_t>(nEle), stream, "qTu");
+            ok &= queueD2H(h_qTg, h_model->qTg, static_cast<size_t>(nEle), stream, "qTg");
+            ok &= queueD2H(h_satn, h_model->ele_satn, static_cast<size_t>(nEle), stream, "ele_satn");
+            ok &= queueD2H(h_effKH, h_model->ele_effKH, static_cast<size_t>(nEle), stream, "ele_effKH");
+            ok &= queueD2H(h_qLakePrcp, h_model->qLakePrcp, static_cast<size_t>(nLake), stream, "qLakePrcp");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_ele_local", "qEleInfil", ctx, ctx.cpu_qEleInfil, h_qi.data(), h_qi.size(), IndexHintKind::Ele, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qEleExfil", ctx, ctx.cpu_qEleExfil, h_qex.data(), h_qex.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qEleRecharge", ctx, ctx.cpu_qEleRecharge, h_qr.data(), h_qr.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qEs", ctx, ctx.cpu_qEs, h_qEs.data(), h_qEs.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qEu", ctx, ctx.cpu_qEu, h_qEu.data(), h_qEu.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qEg", ctx, ctx.cpu_qEg, h_qEg.data(), h_qEg.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qTu", ctx, ctx.cpu_qTu, h_qTu.data(), h_qTu.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qTg", ctx, ctx.cpu_qTg, h_qTg.data(), h_qTg.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "ele_satn", ctx, ctx.cpu_ele_satn, h_satn.data(), h_satn.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "ele_effKH", ctx, ctx.cpu_ele_effKH, h_effKH.data(), h_effKH.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_local", "qLakePrcp", ctx, ctx.cpu_qLakePrcp, h_qLakePrcp.data(), h_qLakePrcp.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 3) element edge surface */
-    if (nEle > 0) {
-        const int nEdge = nEle * 3;
-        const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
-        k_ele_edge_surface<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/3_ele_edge_surface");
+        /* 3) element edge surface */
+        if (nEle > 0) {
+            const int nEdge = nEle * 3;
+            const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
+            k_ele_edge_surface<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_QeleSurf, h_QLakeSurf;
-        bool ok = true;
-        ok &= queueD2H(h_QeleSurf, h_model->QeleSurf, static_cast<size_t>(nEle) * 3, stream, "QeleSurf");
-        ok &= queueD2H(h_QLakeSurf, h_model->QLakeSurf, static_cast<size_t>(nLake), stream, "QLakeSurf");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_edge_surface", "QeleSurf", ctx, ctx.cpu_QeleSurf, h_QeleSurf.data(), h_QeleSurf.size(), IndexHintKind::EleEdge3, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_edge_surface", "QLakeSurf", ctx, ctx.cpu_QLakeSurf, h_QLakeSurf.data(), h_QLakeSurf.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_QeleSurf, h_QLakeSurf;
+            bool ok = true;
+            ok &= queueD2H(h_QeleSurf, h_model->QeleSurf, static_cast<size_t>(nEle) * 3, stream, "QeleSurf");
+            ok &= queueD2H(h_QLakeSurf, h_model->QLakeSurf, static_cast<size_t>(nLake), stream, "QLakeSurf");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_ele_edge_surface", "QeleSurf", ctx, ctx.cpu_QeleSurf, h_QeleSurf.data(), h_QeleSurf.size(), IndexHintKind::EleEdge3, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_edge_surface", "QLakeSurf", ctx, ctx.cpu_QLakeSurf, h_QLakeSurf.data(), h_QLakeSurf.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 4) element edge subsurface */
-    if (nEle > 0) {
-        const int nEdge = nEle * 3;
-        const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
-        k_ele_edge_sub<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/4_ele_edge_subsurface");
+        /* 4) element edge subsurface */
+        if (nEle > 0) {
+            const int nEdge = nEle * 3;
+            const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
+            k_ele_edge_sub<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_QeleSub, h_QLakeSub;
-        bool ok = true;
-        ok &= queueD2H(h_QeleSub, h_model->QeleSub, static_cast<size_t>(nEle) * 3, stream, "QeleSub");
-        ok &= queueD2H(h_QLakeSub, h_model->QLakeSub, static_cast<size_t>(nLake), stream, "QLakeSub");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_ele_edge_sub", "QeleSub", ctx, ctx.cpu_QeleSub, h_QeleSub.data(), h_QeleSub.size(), IndexHintKind::EleEdge3, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_ele_edge_sub", "QLakeSub", ctx, ctx.cpu_QLakeSub, h_QLakeSub.data(), h_QLakeSub.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_QeleSub, h_QLakeSub;
+            bool ok = true;
+            ok &= queueD2H(h_QeleSub, h_model->QeleSub, static_cast<size_t>(nEle) * 3, stream, "QeleSub");
+            ok &= queueD2H(h_QLakeSub, h_model->QLakeSub, static_cast<size_t>(nLake), stream, "QLakeSub");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_ele_edge_sub", "QeleSub", ctx, ctx.cpu_QeleSub, h_QeleSub.data(), h_QeleSub.size(), IndexHintKind::EleEdge3, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_ele_edge_sub", "QLakeSub", ctx, ctx.cpu_QLakeSub, h_QLakeSub.data(), h_QLakeSub.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 5) segment exchange */
-    if (nSeg > 0) {
-        const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
-        k_seg_exchange<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/5_segment_exchange");
+        /* 5) segment exchange */
+        if (nSeg > 0) {
+            const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
+            k_seg_exchange<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_QrivSurf, h_QrivSub, h_Qe2r_Surf, h_Qe2r_Sub;
-        bool ok = true;
-        ok &= queueD2H(h_QrivSurf, h_model->QrivSurf, static_cast<size_t>(nRiv), stream, "QrivSurf");
-        ok &= queueD2H(h_QrivSub, h_model->QrivSub, static_cast<size_t>(nRiv), stream, "QrivSub");
-        ok &= queueD2H(h_Qe2r_Surf, h_model->Qe2r_Surf, static_cast<size_t>(nEle), stream, "Qe2r_Surf");
-        ok &= queueD2H(h_Qe2r_Sub, h_model->Qe2r_Sub, static_cast<size_t>(nEle), stream, "Qe2r_Sub");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_QrivSurf, h_QrivSub, h_Qe2r_Surf, h_Qe2r_Sub;
+            bool ok = true;
+            ok &= queueD2H(h_QrivSurf, h_model->QrivSurf, static_cast<size_t>(nRiv), stream, "QrivSurf");
+            ok &= queueD2H(h_QrivSub, h_model->QrivSub, static_cast<size_t>(nRiv), stream, "QrivSub");
+            ok &= queueD2H(h_Qe2r_Surf, h_model->Qe2r_Surf, static_cast<size_t>(nEle), stream, "Qe2r_Surf");
+            ok &= queueD2H(h_Qe2r_Sub, h_model->Qe2r_Sub, static_cast<size_t>(nEle), stream, "Qe2r_Sub");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 6) river down + up */
-    if (nRiv > 0) {
-        const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
-        k_river_down_and_up<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/6_river_down_up");
+        /* 6) river down + up */
+        if (nRiv > 0) {
+            const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
+            k_river_down_and_up<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_QrivDown, h_QrivUp;
-        std::vector<double> h_topWidth, h_CSarea, h_CSperem;
-        std::vector<double> h_QLakeRivIn;
-        bool ok = true;
-        ok &= queueD2H(h_QrivDown, h_model->QrivDown, static_cast<size_t>(nRiv), stream, "QrivDown");
-        ok &= queueD2H(h_QrivUp, h_model->QrivUp, static_cast<size_t>(nRiv), stream, "QrivUp");
-        ok &= queueD2H(h_topWidth, h_model->riv_topWidth, static_cast<size_t>(nRiv), stream, "riv_topWidth");
-        ok &= queueD2H(h_CSarea, h_model->riv_CSarea, static_cast<size_t>(nRiv), stream, "riv_CSarea");
-        ok &= queueD2H(h_CSperem, h_model->riv_CSperem, static_cast<size_t>(nRiv), stream, "riv_CSperem");
-        ok &= queueD2H(h_QLakeRivIn, h_model->QLakeRivIn, static_cast<size_t>(nLake), stream, "QLakeRivIn");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_river_down_and_up", "QrivDown", ctx, ctx.cpu_QrivDown, h_QrivDown.data(), h_QrivDown.size(), IndexHintKind::Riv, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "QrivUp", ctx, ctx.cpu_QrivUp, h_QrivUp.data(), h_QrivUp.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_topWidth", ctx, ctx.cpu_riv_topWidth, h_topWidth.data(), h_topWidth.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_CSarea", ctx, ctx.cpu_riv_CSarea, h_CSarea.data(), h_CSarea.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "riv_CSperem", ctx, ctx.cpu_riv_CSperem, h_CSperem.data(), h_CSperem.size(), IndexHintKind::Riv, 0);
-            }
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_river_down_and_up", "QLakeRivIn", ctx, ctx.cpu_QLakeRivIn, h_QLakeRivIn.data(), h_QLakeRivIn.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_QrivDown, h_QrivUp;
+            std::vector<double> h_topWidth, h_CSarea, h_CSperem;
+            std::vector<double> h_QLakeRivIn;
+            bool ok = true;
+            ok &= queueD2H(h_QrivDown, h_model->QrivDown, static_cast<size_t>(nRiv), stream, "QrivDown");
+            ok &= queueD2H(h_QrivUp, h_model->QrivUp, static_cast<size_t>(nRiv), stream, "QrivUp");
+            ok &= queueD2H(h_topWidth, h_model->riv_topWidth, static_cast<size_t>(nRiv), stream, "riv_topWidth");
+            ok &= queueD2H(h_CSarea, h_model->riv_CSarea, static_cast<size_t>(nRiv), stream, "riv_CSarea");
+            ok &= queueD2H(h_CSperem, h_model->riv_CSperem, static_cast<size_t>(nRiv), stream, "riv_CSperem");
+            ok &= queueD2H(h_QLakeRivIn, h_model->QLakeRivIn, static_cast<size_t>(nLake), stream, "QLakeRivIn");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_river_down_and_up", "QrivDown", ctx, ctx.cpu_QrivDown, h_QrivDown.data(), h_QrivDown.size(), IndexHintKind::Riv, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_river_down_and_up", "QrivUp", ctx, ctx.cpu_QrivUp, h_QrivUp.data(), h_QrivUp.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_river_down_and_up", "riv_topWidth", ctx, ctx.cpu_riv_topWidth, h_topWidth.data(), h_topWidth.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_river_down_and_up", "riv_CSarea", ctx, ctx.cpu_riv_CSarea, h_CSarea.data(), h_CSarea.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_river_down_and_up", "riv_CSperem", ctx, ctx.cpu_riv_CSperem, h_CSperem.data(), h_CSperem.size(), IndexHintKind::Riv, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_river_down_and_up", "QLakeRivIn", ctx, ctx.cpu_QLakeRivIn, h_QLakeRivIn.data(), h_QLakeRivIn.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
-
-    /* 7) lake toparea + evap cap */
-    if (nLake > 0) {
-        const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
-        k_lake_toparea_and_scale<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+
+    {
+        shud_nvtx::scoped_range stage_range("RHS/7_lake_toparea");
+        /* 7) lake toparea + evap cap */
+        if (nLake > 0) {
+            const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
+            k_lake_toparea_and_scale<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        }
 #ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        std::vector<double> h_y2LakeArea, h_qLakeEvap;
-        bool ok = true;
-        ok &= queueD2H(h_y2LakeArea, h_model->y2LakeArea, static_cast<size_t>(nLake), stream, "y2LakeArea");
-        ok &= queueD2H(h_qLakeEvap, h_model->qLakeEvap, static_cast<size_t>(nLake), stream, "qLakeEvap");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake, 0);
-            if (!g_gpu_verify_halted) {
-                (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake, 0);
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            std::vector<double> h_y2LakeArea, h_qLakeEvap;
+            bool ok = true;
+            ok &= queueD2H(h_y2LakeArea, h_model->y2LakeArea, static_cast<size_t>(nLake), stream, "y2LakeArea");
+            ok &= queueD2H(h_qLakeEvap, h_model->qLakeEvap, static_cast<size_t>(nLake), stream, "qLakeEvap");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake, 0);
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake, 0);
+                }
             }
         }
-    }
 #endif
+    }
 
-    /* 8) apply DY element */
-    if (nEle > 0) {
-        const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
-        k_apply_dy_element<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-    }
-#ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        const size_t count = static_cast<size_t>(3 * nEle);
-        std::vector<realtype> h_dYdot_ele;
-        bool ok = true;
-        ok &= queueD2H(h_dYdot_ele, dYdot, count, stream, "dYdot(ele)");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot, 0);
+    {
+        shud_nvtx::scoped_range stage_range("RHS/8_apply_dy_element");
+        /* 8) apply DY element */
+        if (nEle > 0) {
+            const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
+            k_apply_dy_element<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
         }
-    }
+#ifdef DEBUG_GPU_VERIFY
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            const size_t count = static_cast<size_t>(3 * nEle);
+            std::vector<realtype> h_dYdot_ele;
+            bool ok = true;
+            ok &= queueD2H(h_dYdot_ele, dYdot, count, stream, "dYdot(ele)");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot, 0);
+            }
+        }
 #endif
+    }
 
-    /* 9) apply DY river */
-    if (nRiv > 0) {
-        const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
-        k_apply_dy_river<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-    }
-#ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        const size_t offset = static_cast<size_t>(3 * nEle);
-        const size_t count = static_cast<size_t>(nRiv);
-        std::vector<realtype> h_dYdot_riv;
-        bool ok = true;
-        ok &= queueD2H(h_dYdot_riv, dYdot + offset, count, stream, "dYdot(riv)");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot, offset);
+    {
+        shud_nvtx::scoped_range stage_range("RHS/9_apply_dy_river");
+        /* 9) apply DY river */
+        if (nRiv > 0) {
+            const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
+            k_apply_dy_river<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
         }
-    }
+#ifdef DEBUG_GPU_VERIFY
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            const size_t offset = static_cast<size_t>(3 * nEle);
+            const size_t count = static_cast<size_t>(nRiv);
+            std::vector<realtype> h_dYdot_riv;
+            bool ok = true;
+            ok &= queueD2H(h_dYdot_riv, dYdot + offset, count, stream, "dYdot(riv)");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot, offset);
+            }
+        }
 #endif
+    }
 
-    /* 10) apply DY lake */
-    if (nLake > 0) {
-        const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
-        k_apply_dy_lake<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-    }
-#ifdef DEBUG_GPU_VERIFY
-    if (shouldVerify(verify) && !g_gpu_verify_halted) {
-        const size_t offset = static_cast<size_t>(3 * nEle + nRiv);
-        const size_t count = static_cast<size_t>(nLake);
-        std::vector<realtype> h_dYdot_lake;
-        bool ok = true;
-        ok &= queueD2H(h_dYdot_lake, dYdot + offset, count, stream, "dYdot(lake)");
-        ok &= syncVerifyStream(stream);
-        if (ok) {
-            const auto &ctx = *verify;
-            (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot, offset);
+    {
+        shud_nvtx::scoped_range stage_range("RHS/10_apply_dy_lake");
+        /* 10) apply DY lake */
+        if (nLake > 0) {
+            const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
+            k_apply_dy_lake<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
         }
-    }
+#ifdef DEBUG_GPU_VERIFY
+        if (shouldVerify(verify) && !g_gpu_verify_halted) {
+            const size_t offset = static_cast<size_t>(3 * nEle + nRiv);
+            const size_t count = static_cast<size_t>(nLake);
+            std::vector<realtype> h_dYdot_lake;
+            bool ok = true;
+            ok &= queueD2H(h_dYdot_lake, dYdot + offset, count, stream, "dYdot(lake)");
+            ok &= syncVerifyStream(stream);
+            if (ok) {
+                const auto &ctx = *verify;
+                (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot, offset);
+            }
+        }
 #endif
+    }
 }
 
 #endif /* _CUDA_ON */

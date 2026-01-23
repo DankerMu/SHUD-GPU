@@ -195,6 +195,26 @@ double SHUD(FileIn *fin, FileOut *fout){
     }
     MD->ScreenPrint(t, MD->CS.NumSteps);
     MD->PrintInit(fout->Init_update, t);
+
+    {
+        long int nfe = 0;
+        long int nli = 0;
+        long int nni = 0;
+        long int netf = 0;
+        int stats_flag = 0;
+
+        stats_flag = CVodeGetNumRhsEvals(mem, &nfe);
+        check_flag(&stats_flag, "CVodeGetNumRhsEvals", 1);
+        stats_flag = CVodeGetNumLinIters(mem, &nli);
+        check_flag(&stats_flag, "CVodeGetNumLinIters", 1);
+        stats_flag = CVodeGetNumNonlinSolvIters(mem, &nni);
+        check_flag(&stats_flag, "CVodeGetNumNonlinSolvIters", 1);
+        stats_flag = CVodeGetNumErrTestFails(mem, &netf);
+        check_flag(&stats_flag, "CVodeGetNumErrTestFails", 1);
+
+        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld\n\n", nfe, nli, nni, netf);
+    }
+
     MD->modelSummary(1);
     /* Free memory */
     N_VDestroy(udata);

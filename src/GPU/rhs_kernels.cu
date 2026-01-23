@@ -9,11 +9,178 @@
 
 #include <cmath>
 
+#ifdef DEBUG_GPU_VERIFY
+#include "gpu_verify.hpp"
+
+#include <cstdlib>
+#include <string>
+#include <vector>
+#endif
+
 namespace {
 
 __device__ inline double d_min(double a, double b) { return a < b ? a : b; }
 __device__ inline double d_max(double a, double b) { return a > b ? a : b; }
 __device__ inline double d_clamp_nonneg(double x) { return x >= 0.0 ? x : 0.0; }
+
+#ifdef DEBUG_GPU_VERIFY
+
+static bool g_gpu_verify_halted = false;
+
+enum class IndexHintKind { None, Ele, EleEdge3, Riv, Lake, DYdot };
+
+static std::string indexHint(IndexHintKind kind, const GpuVerifyContext &ctx, size_t idx)
+{
+    char buf[128];
+    buf[0] = '\0';
+    switch (kind) {
+        case IndexHintKind::Ele:
+            snprintf(buf, sizeof(buf), " (ele=%zu)", idx + 1);
+            break;
+        case IndexHintKind::EleEdge3: {
+            const size_t ele = idx / 3;
+            const size_t edge = idx - ele * 3;
+            snprintf(buf, sizeof(buf), " (ele=%zu edge=%zu)", ele + 1, edge);
+            break;
+        }
+        case IndexHintKind::Riv:
+            snprintf(buf, sizeof(buf), " (riv=%zu)", idx + 1);
+            break;
+        case IndexHintKind::Lake:
+            snprintf(buf, sizeof(buf), " (lake=%zu)", idx + 1);
+            break;
+        case IndexHintKind::DYdot: {
+            const size_t nEle = static_cast<size_t>(ctx.NumEle);
+            const size_t nRiv = static_cast<size_t>(ctx.NumRiv);
+            if (idx < nEle) {
+                snprintf(buf, sizeof(buf), " (ele=%zu var=Ysf)", idx + 1);
+            } else if (idx < 2 * nEle) {
+                snprintf(buf, sizeof(buf), " (ele=%zu var=Yus)", (idx - nEle) + 1);
+            } else if (idx < 3 * nEle) {
+                snprintf(buf, sizeof(buf), " (ele=%zu var=Ygw)", (idx - 2 * nEle) + 1);
+            } else if (idx < 3 * nEle + nRiv) {
+                snprintf(buf, sizeof(buf), " (riv=%zu var=Yriv)", (idx - 3 * nEle) + 1);
+            } else {
+                snprintf(buf, sizeof(buf), " (lake=%zu var=Ylake)", (idx - (3 * nEle + nRiv)) + 1);
+            }
+            break;
+        }
+        case IndexHintKind::None:
+        default:
+            break;
+    }
+    return std::string(buf);
+}
+
+template <typename T>
+static bool queueD2H(std::vector<T> &dst, const T *d_src, size_t count, cudaStream_t stream, const char *what)
+{
+    if (count == 0) {
+        dst.clear();
+        return true;
+    }
+    if (d_src == nullptr) {
+        fprintf(stderr, "[GPU_VERIFY] ERROR: device pointer is NULL for field=%s\n", (what != nullptr) ? what : "(unknown)");
+        dst.clear();
+        return false;
+    }
+
+    dst.resize(count);
+    const cudaError_t err = cudaMemcpyAsync(dst.data(), d_src, count * sizeof(T), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr,
+                "[GPU_VERIFY] CUDA_ERROR: cudaMemcpyAsync(%s) failed: %s\n",
+                (what != nullptr) ? what : "(unknown)",
+                cudaGetErrorString(err));
+        return false;
+    }
+    return true;
+}
+
+template <typename CpuT, typename GpuT>
+static void printFirstMismatches(const char *kernel,
+                                 const char *field,
+                                 const GpuVerifyContext &ctx,
+                                 const CpuT *cpu,
+                                 const GpuT *gpu,
+                                 size_t n,
+                                 IndexHintKind hintKind)
+{
+    if (ctx.settings.max_print <= 0 || cpu == nullptr || gpu == nullptr || n == 0) {
+        return;
+    }
+
+    int printed = 0;
+    for (size_t i = 0; i < n && printed < ctx.settings.max_print; i++) {
+        const double c = static_cast<double>(cpu[i]);
+        const double g = static_cast<double>(gpu[i]);
+        const double diff = (c > g) ? (c - g) : (g - c);
+        const double ac = (c >= 0.0) ? c : -c;
+        const double ag = (g >= 0.0) ? g : -g;
+        const double denom = (ac > ag) ? ac : ag;
+        const double thr = (ctx.settings.atol > ctx.settings.rtol * denom) ? ctx.settings.atol : (ctx.settings.rtol * denom);
+        if (diff <= thr) {
+            continue;
+        }
+
+        const std::string hint = indexHint(hintKind, ctx, i);
+        fprintf(stderr,
+                "[GPU_VERIFY]   kernel=%s field=%s idx=%zu%s cpu=%.10g gpu=%.10g diff=%.6e thr=%.6e\n",
+                (kernel != nullptr) ? kernel : "(unknown)",
+                (field != nullptr) ? field : "(unknown)",
+                i,
+                hint.c_str(),
+                c,
+                g,
+                diff,
+                thr);
+        printed++;
+    }
+}
+
+template <typename CpuT, typename GpuT>
+static bool compareAndReport(const char *kernel,
+                             const char *field,
+                             const GpuVerifyContext &ctx,
+                             const CpuT *cpu,
+                             const GpuT *gpu,
+                             size_t n,
+                             IndexHintKind hintKind)
+{
+    const CompareResult r = compare_arrays(cpu, gpu, n, ctx.settings.atol, ctx.settings.rtol);
+    if (r.mismatch_count == 0) {
+        return true;
+    }
+
+    const std::string hint = indexHint(hintKind, ctx, r.max_idx);
+    gpuVerifyReport(stderr, kernel, field, ctx, r, hint.c_str());
+    printFirstMismatches(kernel, field, ctx, cpu, gpu, n, hintKind);
+
+    if (ctx.settings.abort_on_mismatch) {
+        std::abort();
+    }
+    if (ctx.settings.stop_on_mismatch) {
+        g_gpu_verify_halted = true;
+    }
+    return false;
+}
+
+static bool shouldVerify(const GpuVerifyContext *verify)
+{
+    return (verify != nullptr) && verify->settings.enabled && !g_gpu_verify_halted;
+}
+
+static bool syncVerifyStream(cudaStream_t stream)
+{
+    const cudaError_t err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[GPU_VERIFY] CUDA_ERROR: cudaStreamSynchronize failed: %s\n", cudaGetErrorString(err));
+        return false;
+    }
+    return true;
+}
+
+#endif /* DEBUG_GPU_VERIFY */
 
 __device__ inline double pow23(double x)
 {
@@ -816,7 +983,12 @@ void launch_rhs_kernels(realtype t,
                         realtype *dYdot,
                         const DeviceModel *d_model,
                         const DeviceModel *h_model,
-                        cudaStream_t stream)
+                        cudaStream_t stream
+#ifdef DEBUG_GPU_VERIFY
+                        ,
+                        const GpuVerifyContext *verify
+#endif
+)
 {
     (void)t;
     if (dY == nullptr || dYdot == nullptr || d_model == nullptr || h_model == nullptr) {
@@ -858,12 +1030,94 @@ void launch_rhs_kernels(realtype t,
         const int blocks = cap_blocks((nY + kBlockSize - 1) / kBlockSize);
         k_apply_bc_and_sanitize_state<<<blocks, kBlockSize, 0, stream>>>(dY, d_model, clamp_policy);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify)) {
+        std::vector<double> h_uYsf, h_uYus, h_uYgw, h_uYriv, h_uYlake;
+        bool ok = true;
+        ok &= queueD2H(h_uYsf, h_model->uYsf, static_cast<size_t>(nEle), stream, "uYsf");
+        ok &= queueD2H(h_uYus, h_model->uYus, static_cast<size_t>(nEle), stream, "uYus");
+        ok &= queueD2H(h_uYgw, h_model->uYgw, static_cast<size_t>(nEle), stream, "uYgw");
+        ok &= queueD2H(h_uYriv, h_model->uYriv, static_cast<size_t>(nRiv), stream, "uYriv");
+        ok &= queueD2H(h_uYlake, h_model->uYlake, static_cast<size_t>(nLake), stream, "uYlake");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYsf", ctx, ctx.cpu_uYsf, h_uYsf.data(), h_uYsf.size(), IndexHintKind::Ele);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYus", ctx, ctx.cpu_uYus, h_uYus.data(), h_uYus.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYgw", ctx, ctx.cpu_uYgw, h_uYgw.data(), h_uYgw.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYriv", ctx, ctx.cpu_uYriv, h_uYriv.data(), h_uYriv.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_apply_bc_and_sanitize_state", "uYlake", ctx, ctx.cpu_yLakeStg, h_uYlake.data(), h_uYlake.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 2) element local */
     if (nEle > 0) {
         const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
         k_ele_local<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_qi, h_qex, h_qr;
+        std::vector<double> h_qEs, h_qEu, h_qEg, h_qTu, h_qTg;
+        std::vector<double> h_satn, h_effKH, h_qLakePrcp;
+        bool ok = true;
+        ok &= queueD2H(h_qi, h_model->qEleInfil, static_cast<size_t>(nEle), stream, "qEleInfil");
+        ok &= queueD2H(h_qex, h_model->qEleExfil, static_cast<size_t>(nEle), stream, "qEleExfil");
+        ok &= queueD2H(h_qr, h_model->qEleRecharge, static_cast<size_t>(nEle), stream, "qEleRecharge");
+        ok &= queueD2H(h_qEs, h_model->qEs, static_cast<size_t>(nEle), stream, "qEs");
+        ok &= queueD2H(h_qEu, h_model->qEu, static_cast<size_t>(nEle), stream, "qEu");
+        ok &= queueD2H(h_qEg, h_model->qEg, static_cast<size_t>(nEle), stream, "qEg");
+        ok &= queueD2H(h_qTu, h_model->qTu, static_cast<size_t>(nEle), stream, "qTu");
+        ok &= queueD2H(h_qTg, h_model->qTg, static_cast<size_t>(nEle), stream, "qTg");
+        ok &= queueD2H(h_satn, h_model->ele_satn, static_cast<size_t>(nEle), stream, "ele_satn");
+        ok &= queueD2H(h_effKH, h_model->ele_effKH, static_cast<size_t>(nEle), stream, "ele_effKH");
+        ok &= queueD2H(h_qLakePrcp, h_model->qLakePrcp, static_cast<size_t>(nLake), stream, "qLakePrcp");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_ele_local", "qEleInfil", ctx, ctx.cpu_qEleInfil, h_qi.data(), h_qi.size(), IndexHintKind::Ele);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qEleExfil", ctx, ctx.cpu_qEleExfil, h_qex.data(), h_qex.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qEleRecharge", ctx, ctx.cpu_qEleRecharge, h_qr.data(), h_qr.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qEs", ctx, ctx.cpu_qEs, h_qEs.data(), h_qEs.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qEu", ctx, ctx.cpu_qEu, h_qEu.data(), h_qEu.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qEg", ctx, ctx.cpu_qEg, h_qEg.data(), h_qEg.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qTu", ctx, ctx.cpu_qTu, h_qTu.data(), h_qTu.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qTg", ctx, ctx.cpu_qTg, h_qTg.data(), h_qTg.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "ele_satn", ctx, ctx.cpu_ele_satn, h_satn.data(), h_satn.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "ele_effKH", ctx, ctx.cpu_ele_effKH, h_effKH.data(), h_effKH.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_local", "qLakePrcp", ctx, ctx.cpu_qLakePrcp, h_qLakePrcp.data(), h_qLakePrcp.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 3) element edge surface */
     if (nEle > 0) {
@@ -871,6 +1125,22 @@ void launch_rhs_kernels(realtype t,
         const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
         k_ele_edge_surface<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_QeleSurf, h_QLakeSurf;
+        bool ok = true;
+        ok &= queueD2H(h_QeleSurf, h_model->QeleSurf, static_cast<size_t>(nEle) * 3, stream, "QeleSurf");
+        ok &= queueD2H(h_QLakeSurf, h_model->QLakeSurf, static_cast<size_t>(nLake), stream, "QLakeSurf");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_ele_edge_surface", "QeleSurf", ctx, ctx.cpu_QeleSurf, h_QeleSurf.data(), h_QeleSurf.size(), IndexHintKind::EleEdge3);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_edge_surface", "QLakeSurf", ctx, ctx.cpu_QLakeSurf, h_QLakeSurf.data(), h_QLakeSurf.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 4) element edge subsurface */
     if (nEle > 0) {
@@ -878,42 +1148,173 @@ void launch_rhs_kernels(realtype t,
         const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
         k_ele_edge_sub<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_QeleSub, h_QLakeSub;
+        bool ok = true;
+        ok &= queueD2H(h_QeleSub, h_model->QeleSub, static_cast<size_t>(nEle) * 3, stream, "QeleSub");
+        ok &= queueD2H(h_QLakeSub, h_model->QLakeSub, static_cast<size_t>(nLake), stream, "QLakeSub");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_ele_edge_sub", "QeleSub", ctx, ctx.cpu_QeleSub, h_QeleSub.data(), h_QeleSub.size(), IndexHintKind::EleEdge3);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_ele_edge_sub", "QLakeSub", ctx, ctx.cpu_QLakeSub, h_QLakeSub.data(), h_QLakeSub.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 5) segment exchange */
     if (nSeg > 0) {
         const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
         k_seg_exchange<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_QrivSurf, h_QrivSub, h_Qe2r_Surf, h_Qe2r_Sub;
+        bool ok = true;
+        ok &= queueD2H(h_QrivSurf, h_model->QrivSurf, static_cast<size_t>(nRiv), stream, "QrivSurf");
+        ok &= queueD2H(h_QrivSub, h_model->QrivSub, static_cast<size_t>(nRiv), stream, "QrivSub");
+        ok &= queueD2H(h_Qe2r_Surf, h_model->Qe2r_Surf, static_cast<size_t>(nEle), stream, "Qe2r_Surf");
+        ok &= queueD2H(h_Qe2r_Sub, h_model->Qe2r_Sub, static_cast<size_t>(nEle), stream, "Qe2r_Sub");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele);
+            }
+        }
+    }
+#endif
 
     /* 6) river down + up */
     if (nRiv > 0) {
         const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
         k_river_down_and_up<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_QrivDown, h_QrivUp;
+        std::vector<double> h_topWidth, h_CSarea, h_CSperem;
+        std::vector<double> h_QLakeRivIn;
+        bool ok = true;
+        ok &= queueD2H(h_QrivDown, h_model->QrivDown, static_cast<size_t>(nRiv), stream, "QrivDown");
+        ok &= queueD2H(h_QrivUp, h_model->QrivUp, static_cast<size_t>(nRiv), stream, "QrivUp");
+        ok &= queueD2H(h_topWidth, h_model->riv_topWidth, static_cast<size_t>(nRiv), stream, "riv_topWidth");
+        ok &= queueD2H(h_CSarea, h_model->riv_CSarea, static_cast<size_t>(nRiv), stream, "riv_CSarea");
+        ok &= queueD2H(h_CSperem, h_model->riv_CSperem, static_cast<size_t>(nRiv), stream, "riv_CSperem");
+        ok &= queueD2H(h_QLakeRivIn, h_model->QLakeRivIn, static_cast<size_t>(nLake), stream, "QLakeRivIn");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_river_down_and_up", "QrivDown", ctx, ctx.cpu_QrivDown, h_QrivDown.data(), h_QrivDown.size(), IndexHintKind::Riv);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_river_down_and_up", "QrivUp", ctx, ctx.cpu_QrivUp, h_QrivUp.data(), h_QrivUp.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_river_down_and_up", "riv_topWidth", ctx, ctx.cpu_riv_topWidth, h_topWidth.data(), h_topWidth.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_river_down_and_up", "riv_CSarea", ctx, ctx.cpu_riv_CSarea, h_CSarea.data(), h_CSarea.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_river_down_and_up", "riv_CSperem", ctx, ctx.cpu_riv_CSperem, h_CSperem.data(), h_CSperem.size(), IndexHintKind::Riv);
+            }
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_river_down_and_up", "QLakeRivIn", ctx, ctx.cpu_QLakeRivIn, h_QLakeRivIn.data(), h_QLakeRivIn.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 7) lake toparea + evap cap */
     if (nLake > 0) {
         const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
         k_lake_toparea_and_scale<<<blocks, kBlockSize, 0, stream>>>(d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        std::vector<double> h_y2LakeArea, h_qLakeEvap;
+        bool ok = true;
+        ok &= queueD2H(h_y2LakeArea, h_model->y2LakeArea, static_cast<size_t>(nLake), stream, "y2LakeArea");
+        ok &= queueD2H(h_qLakeEvap, h_model->qLakeEvap, static_cast<size_t>(nLake), stream, "qLakeEvap");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake);
+            if (!g_gpu_verify_halted) {
+                (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake);
+            }
+        }
+    }
+#endif
 
     /* 8) apply DY element */
     if (nEle > 0) {
         const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
         k_apply_dy_element<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        const size_t count = static_cast<size_t>(3 * nEle);
+        std::vector<realtype> h_dYdot_ele;
+        bool ok = true;
+        ok &= queueD2H(h_dYdot_ele, dYdot, count, stream, "dYdot(ele)");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot);
+        }
+    }
+#endif
 
     /* 9) apply DY river */
     if (nRiv > 0) {
         const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
         k_apply_dy_river<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        const size_t offset = static_cast<size_t>(3 * nEle);
+        const size_t count = static_cast<size_t>(nRiv);
+        std::vector<realtype> h_dYdot_riv;
+        bool ok = true;
+        ok &= queueD2H(h_dYdot_riv, dYdot + offset, count, stream, "dYdot(riv)");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot);
+        }
+    }
+#endif
 
     /* 10) apply DY lake */
     if (nLake > 0) {
         const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
         k_apply_dy_lake<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
     }
+#ifdef DEBUG_GPU_VERIFY
+    if (shouldVerify(verify) && !g_gpu_verify_halted) {
+        const size_t offset = static_cast<size_t>(3 * nEle + nRiv);
+        const size_t count = static_cast<size_t>(nLake);
+        std::vector<realtype> h_dYdot_lake;
+        bool ok = true;
+        ok &= queueD2H(h_dYdot_lake, dYdot + offset, count, stream, "dYdot(lake)");
+        ok &= syncVerifyStream(stream);
+        if (ok) {
+            const auto &ctx = *verify;
+            (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot);
+        }
+    }
+#endif
 }
 
 #endif /* _CUDA_ON */

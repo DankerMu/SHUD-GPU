@@ -68,6 +68,14 @@ NVCC     ?= nvcc
 CFLAGS   = -O3 -g  -std=c++14
 #STCFLAG     = -static
 
+# Optional GPU debug verification (GPU vs CPU), with per-kernel checkpoints.
+# Enable with:
+#   make shud_cuda DEBUG_GPU_VERIFY=1
+DEBUG_GPU_VERIFY ?= 0
+ifeq ($(DEBUG_GPU_VERIFY),1)
+  CFLAGS += -DDEBUG_GPU_VERIFY
+endif
+
 SRC    	= ${SRC_DIR}/classes/*.cpp \
 		  ${SRC_DIR}/ModelData/*.cpp \
 		  ${SRC_DIR}/Model/*.cpp \
@@ -191,4 +199,3 @@ clean:
 	@echo
 	@echo "Done."
 	@echo
-

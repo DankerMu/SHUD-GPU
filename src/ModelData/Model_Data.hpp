@@ -197,6 +197,18 @@ public:
     long ForcStartTime;
     TimeContext Time;
     DeviceModel *d_model = nullptr;
+#ifdef _CUDA_ON
+    void *cuda_stream = nullptr;
+    double *d_qEleNetPrep = nullptr;
+    double *d_qPotEvap = nullptr;
+    double *d_qPotTran = nullptr;
+    double *d_qEleE_IC = nullptr;
+    double *d_t_lai = nullptr;
+    double *d_fu_Surf = nullptr;
+    double *d_fu_Sub = nullptr;
+    unsigned long nForcingStep = 0;
+    unsigned long nGpuForcingCopy = 0;
+#endif
     
 private:
     double *t_prcp;
@@ -269,6 +281,9 @@ public:
     void ET(double t, double tnext);
     void updateAllTimeSeries(double t_min);
     void updateforcing(double t);
+#ifdef _CUDA_ON
+    void gpuUpdateForcing();
+#endif
     double getArea();
     void PassValue();
 private:

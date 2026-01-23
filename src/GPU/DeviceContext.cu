@@ -175,6 +175,7 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.riv_CSarea);
     cudaFreeIfNotNull(h.riv_CSperem);
     cudaFreeIfNotNull(h.riv_topWidth);
+    cudaFreeIfNotNull(h.prec_inv);
 
     h = DeviceModel{};
 }
@@ -972,6 +973,17 @@ void gpuInit(Model_Data *md)
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate fu_Sub\n");
         goto fail;
+    }
+
+    /* ------------------------------ Preconditioner storage ------------------------------ */
+    {
+        const size_t prec_count = static_cast<size_t>(h.NumEle) * 9u + static_cast<size_t>(h.NumRiv) +
+                                  static_cast<size_t>(h.NumLake);
+        err = cudaAllocAndUpload(&h.prec_inv, nullptr, prec_count);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate prec_inv\n");
+            goto fail;
+        }
     }
 
     md->d_qElePrep = h.qElePrep;

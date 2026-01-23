@@ -136,6 +136,9 @@ struct DeviceModel {
     double *riv_CSarea = nullptr;
     double *riv_CSperem = nullptr;
     double *riv_topWidth = nullptr;
+
+    /* Block-Jacobi preconditioner storage (PSetup/PSolve). */
+    double *prec_inv = nullptr;
 };
 
 #ifdef _CUDA_ON

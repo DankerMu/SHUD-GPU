@@ -289,6 +289,7 @@ public:
 #ifdef _CUDA_ON
     void gpuUpdateForcing();
     void gpuWaitForcingCopy();
+    void gpuSyncStateFromDevice(N_Vector y);
 #endif
     double getArea();
     void PassValue();

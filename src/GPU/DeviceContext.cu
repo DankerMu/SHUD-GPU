@@ -67,6 +67,7 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.ele_nabrToMe);
     cudaFreeIfNotNull(h.ele_edge);
     cudaFreeIfNotNull(h.ele_Dist2Nabor);
+    cudaFreeIfNotNull(h.ele_Dist2Edge);
     cudaFreeIfNotNull(h.ele_avgRough);
 
     cudaFreeIfNotNull(h.ele_AquiferDepth);
@@ -85,11 +86,13 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.ele_geo_vAreaF);
     cudaFreeIfNotNull(h.ele_macKsatH);
     cudaFreeIfNotNull(h.ele_macD);
+    cudaFreeIfNotNull(h.ele_RzD);
     cudaFreeIfNotNull(h.ele_VegFrac);
     cudaFreeIfNotNull(h.ele_ImpAF);
     cudaFreeIfNotNull(h.ele_iLake);
     cudaFreeIfNotNull(h.ele_iBC);
     cudaFreeIfNotNull(h.ele_iSS);
+    cudaFreeIfNotNull(h.ele_yBC);
     cudaFreeIfNotNull(h.ele_QBC);
     cudaFreeIfNotNull(h.ele_QSS);
 
@@ -102,6 +105,11 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.riv_BottomWidth);
     cudaFreeIfNotNull(h.riv_BedSlope);
     cudaFreeIfNotNull(h.riv_rivRough);
+    cudaFreeIfNotNull(h.riv_avgRough);
+    cudaFreeIfNotNull(h.riv_Dist2DownStream);
+    cudaFreeIfNotNull(h.riv_KsatH);
+    cudaFreeIfNotNull(h.riv_BedThick);
+    cudaFreeIfNotNull(h.riv_yBC);
     cudaFreeIfNotNull(h.riv_qBC);
     cudaFreeIfNotNull(h.riv_zbed);
     cudaFreeIfNotNull(h.riv_zbank);
@@ -120,6 +128,7 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.bathy_yi);
     cudaFreeIfNotNull(h.bathy_ai);
 
+    cudaFreeIfNotNull(h.qElePrep);
     cudaFreeIfNotNull(h.qEleNetPrep);
     cudaFreeIfNotNull(h.qPotEvap);
     cudaFreeIfNotNull(h.qPotTran);
@@ -127,6 +136,14 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.t_lai);
     cudaFreeIfNotNull(h.fu_Surf);
     cudaFreeIfNotNull(h.fu_Sub);
+
+    cudaFreeIfNotNull(h.uYsf);
+    cudaFreeIfNotNull(h.uYus);
+    cudaFreeIfNotNull(h.uYgw);
+    cudaFreeIfNotNull(h.uYriv);
+    cudaFreeIfNotNull(h.uYlake);
+    cudaFreeIfNotNull(h.ele_satn);
+    cudaFreeIfNotNull(h.ele_effKH);
 
     cudaFreeIfNotNull(h.qEleInfil);
     cudaFreeIfNotNull(h.qEleExfil);
@@ -155,6 +172,10 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.qLakeEvap);
     cudaFreeIfNotNull(h.y2LakeArea);
 
+    cudaFreeIfNotNull(h.riv_CSarea);
+    cudaFreeIfNotNull(h.riv_CSperem);
+    cudaFreeIfNotNull(h.riv_topWidth);
+
     h = DeviceModel{};
 }
 
@@ -177,6 +198,7 @@ void gpuInit(Model_Data *md)
     h.NumRiv = md->NumRiv;
     h.NumSeg = md->NumSegmt;
     h.NumLake = md->NumLake;
+    h.CloseBoundary = md->CS.CloseBoundary;
 
     cudaError_t err = cudaSuccess;
 
@@ -207,6 +229,7 @@ void gpuInit(Model_Data *md)
     std::vector<int> ele_nabrToMe(static_cast<size_t>(h.NumEle) * 3);
     std::vector<double> ele_edge(static_cast<size_t>(h.NumEle) * 3);
     std::vector<double> ele_Dist2Nabor(static_cast<size_t>(h.NumEle) * 3);
+    std::vector<double> ele_Dist2Edge(static_cast<size_t>(h.NumEle) * 3);
     std::vector<double> ele_avgRough(static_cast<size_t>(h.NumEle) * 3);
 
     std::vector<double> ele_AquiferDepth(h.NumEle);
@@ -225,11 +248,13 @@ void gpuInit(Model_Data *md)
     std::vector<double> ele_geo_vAreaF(h.NumEle);
     std::vector<double> ele_macKsatH(h.NumEle);
     std::vector<double> ele_macD(h.NumEle);
+    std::vector<double> ele_RzD(h.NumEle);
     std::vector<double> ele_VegFrac(h.NumEle);
     std::vector<double> ele_ImpAF(h.NumEle);
     std::vector<int> ele_iLake(h.NumEle);
     std::vector<int> ele_iBC(h.NumEle);
     std::vector<int> ele_iSS(h.NumEle);
+    std::vector<double> ele_yBC(h.NumEle);
     std::vector<double> ele_QBC(h.NumEle);
     std::vector<double> ele_QSS(h.NumEle);
 
@@ -256,11 +281,13 @@ void gpuInit(Model_Data *md)
         ele_geo_vAreaF[i] = md->Ele[i].geo_vAreaF;
         ele_macKsatH[i] = md->Ele[i].macKsatH;
         ele_macD[i] = md->Ele[i].macD;
+        ele_RzD[i] = md->Ele[i].RzD;
         ele_VegFrac[i] = md->Ele[i].VegFrac;
         ele_ImpAF[i] = md->Ele[i].ImpAF;
         ele_iLake[i] = md->Ele[i].iLake;
         ele_iBC[i] = md->Ele[i].iBC;
         ele_iSS[i] = md->Ele[i].iSS;
+        ele_yBC[i] = md->Ele[i].yBC;
         ele_QBC[i] = md->Ele[i].QBC;
         ele_QSS[i] = md->Ele[i].QSS;
 
@@ -271,6 +298,7 @@ void gpuInit(Model_Data *md)
             ele_nabrToMe[idx] = md->Ele[i].nabrToMe[j];
             ele_edge[idx] = md->Ele[i].edge[j];
             ele_Dist2Nabor[idx] = md->Ele[i].Dist2Nabor[j];
+            ele_Dist2Edge[idx] = md->Ele[i].Dist2Edge[j];
             ele_avgRough[idx] = md->Ele[i].avgRough[j];
         }
     }
@@ -324,6 +352,11 @@ void gpuInit(Model_Data *md)
     err = cudaAllocAndUpload(&h.ele_Dist2Nabor, ele_Dist2Nabor.data(), ele_Dist2Nabor.size());
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload ele_Dist2Nabor\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_Dist2Edge, ele_Dist2Edge.data(), ele_Dist2Edge.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_Dist2Edge\n");
         goto fail;
     }
     err = cudaAllocAndUpload(&h.ele_avgRough, ele_avgRough.data(), ele_avgRough.size());
@@ -412,6 +445,11 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload ele_macD\n");
         goto fail;
     }
+    err = cudaAllocAndUpload(&h.ele_RzD, ele_RzD.data(), ele_RzD.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_RzD\n");
+        goto fail;
+    }
     err = cudaAllocAndUpload(&h.ele_VegFrac, ele_VegFrac.data(), ele_VegFrac.size());
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload ele_VegFrac\n");
@@ -437,6 +475,11 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload ele_iSS\n");
         goto fail;
     }
+    err = cudaAllocAndUpload(&h.ele_yBC, ele_yBC.data(), ele_yBC.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_yBC\n");
+        goto fail;
+    }
     err = cudaAllocAndUpload(&h.ele_QBC, ele_QBC.data(), ele_QBC.size());
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload ele_QBC\n");
@@ -459,6 +502,11 @@ void gpuInit(Model_Data *md)
         std::vector<double> riv_BottomWidth(h.NumRiv);
         std::vector<double> riv_BedSlope(h.NumRiv);
         std::vector<double> riv_rivRough(h.NumRiv);
+        std::vector<double> riv_avgRough(h.NumRiv);
+        std::vector<double> riv_Dist2DownStream(h.NumRiv);
+        std::vector<double> riv_KsatH(h.NumRiv);
+        std::vector<double> riv_BedThick(h.NumRiv);
+        std::vector<double> riv_yBC(h.NumRiv);
         std::vector<double> riv_qBC(h.NumRiv);
         std::vector<double> riv_zbed(h.NumRiv);
         std::vector<double> riv_zbank(h.NumRiv);
@@ -473,6 +521,11 @@ void gpuInit(Model_Data *md)
             riv_BottomWidth[i] = md->Riv[i].BottomWidth;
             riv_BedSlope[i] = md->Riv[i].BedSlope;
             riv_rivRough[i] = md->Riv[i].rivRough;
+            riv_avgRough[i] = md->Riv[i].avgRough;
+            riv_Dist2DownStream[i] = md->Riv[i].Dist2DownStream;
+            riv_KsatH[i] = md->Riv[i].KsatH;
+            riv_BedThick[i] = md->Riv[i].BedThick;
+            riv_yBC[i] = md->Riv[i].yBC;
             riv_qBC[i] = md->Riv[i].qBC;
             riv_zbed[i] = md->Riv[i].zbed;
             riv_zbank[i] = md->Riv[i].zbank;
@@ -521,6 +574,31 @@ void gpuInit(Model_Data *md)
         err = cudaAllocAndUpload(&h.riv_rivRough, riv_rivRough.data(), riv_rivRough.size());
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to upload riv_rivRough\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_avgRough, riv_avgRough.data(), riv_avgRough.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_avgRough\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_Dist2DownStream, riv_Dist2DownStream.data(), riv_Dist2DownStream.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_Dist2DownStream\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_KsatH, riv_KsatH.data(), riv_KsatH.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_KsatH\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_BedThick, riv_BedThick.data(), riv_BedThick.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_BedThick\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_yBC, riv_yBC.data(), riv_yBC.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_yBC\n");
             goto fail;
         }
         err = cudaAllocAndUpload(&h.riv_qBC, riv_qBC.data(), riv_qBC.size());
@@ -656,6 +734,51 @@ void gpuInit(Model_Data *md)
     }
 
     /* ------------------------------ Scratch arrays ------------------------------ */
+    err = cudaAllocAndUpload(&h.uYsf, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate uYsf\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.uYus, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate uYus\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.uYgw, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate uYgw\n");
+        goto fail;
+    }
+    if (h.NumRiv > 0) {
+        err = cudaAllocAndUpload(&h.uYriv, nullptr, static_cast<size_t>(h.NumRiv));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate uYriv\n");
+            goto fail;
+        }
+    }
+    if (h.NumLake > 0) {
+        err = cudaAllocAndUpload(&h.uYlake, nullptr, static_cast<size_t>(h.NumLake));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate uYlake\n");
+            goto fail;
+        }
+    }
+    err = cudaAllocAndUpload(&h.ele_satn, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate ele_satn\n");
+        goto fail;
+    }
+    err = cudaMemset(h.ele_satn, 0xFF, static_cast<size_t>(h.NumEle) * sizeof(double));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to initialize ele_satn\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_effKH, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate ele_effKH\n");
+        goto fail;
+    }
+
     err = cudaAllocAndUpload(&h.qEleInfil, md->qEleInfil, static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload qEleInfil\n");
@@ -753,6 +876,22 @@ void gpuInit(Model_Data *md)
             fprintf(stderr, "gpuInit: failed to upload QrivDown\n");
             goto fail;
         }
+
+        err = cudaAllocAndUpload(&h.riv_CSarea, nullptr, static_cast<size_t>(h.NumRiv));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate riv_CSarea\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_CSperem, nullptr, static_cast<size_t>(h.NumRiv));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate riv_CSperem\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_topWidth, nullptr, static_cast<size_t>(h.NumRiv));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate riv_topWidth\n");
+            goto fail;
+        }
     }
 
     if (h.NumLake > 0) {
@@ -794,6 +933,11 @@ void gpuInit(Model_Data *md)
     }
 
     /* ------------------------------ Forcing arrays ------------------------------ */
+    err = cudaAllocAndUpload(&h.qElePrep, nullptr, static_cast<size_t>(h.NumEle));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to allocate qElePrep\n");
+        goto fail;
+    }
     err = cudaAllocAndUpload(&h.qEleNetPrep, nullptr, static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qEleNetPrep\n");
@@ -830,6 +974,7 @@ void gpuInit(Model_Data *md)
         goto fail;
     }
 
+    md->d_qElePrep = h.qElePrep;
     md->d_qEleNetPrep = h.qEleNetPrep;
     md->d_qPotEvap = h.qPotEvap;
     md->d_qPotTran = h.qPotTran;
@@ -837,6 +982,10 @@ void gpuInit(Model_Data *md)
     md->d_t_lai = h.t_lai;
     md->d_fu_Surf = h.fu_Surf;
     md->d_fu_Sub = h.fu_Sub;
+    md->d_ele_yBC = h.ele_yBC;
+    md->d_ele_QBC = h.ele_QBC;
+    md->d_riv_yBC = h.riv_yBC;
+    md->d_riv_qBC = h.riv_qBC;
 
     /* Finally: allocate & upload the DeviceModel itself. */
     err = cudaMalloc(reinterpret_cast<void **>(&md->d_model), sizeof(DeviceModel));
@@ -849,6 +998,8 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload md->d_model\n");
         goto fail;
     }
+    delete md->h_model;
+    md->h_model = new DeviceModel(h);
     return;
 
 fail:
@@ -865,6 +1016,8 @@ fail:
         cudaFreeIfNotNull(md->d_model);
         md->d_model = nullptr;
     }
+    delete md->h_model;
+    md->h_model = nullptr;
     cudaDie(err, "gpuInit");
 }
 
@@ -873,6 +1026,9 @@ void gpuFree(Model_Data *md)
     if (md == nullptr) {
         return;
     }
+
+    delete md->h_model;
+    md->h_model = nullptr;
 
     if (md->cuda_stream != nullptr) {
         (void)cudaStreamSynchronize(md->cuda_stream);
@@ -893,6 +1049,11 @@ void gpuFree(Model_Data *md)
     md->d_t_lai = nullptr;
     md->d_fu_Surf = nullptr;
     md->d_fu_Sub = nullptr;
+    md->d_qElePrep = nullptr;
+    md->d_ele_yBC = nullptr;
+    md->d_ele_QBC = nullptr;
+    md->d_riv_yBC = nullptr;
+    md->d_riv_qBC = nullptr;
 
     if (md->d_model == nullptr) {
         return;
@@ -927,7 +1088,10 @@ void Model_Data::gpuUpdateForcing()
     cudaStream_t stream = cuda_stream;
     const size_t bytes = static_cast<size_t>(NumEle) * sizeof(double);
 
-    cudaError_t err = cudaMemcpyAsync(d_qEleNetPrep, qEleNetPrep, bytes, cudaMemcpyHostToDevice, stream);
+    cudaError_t err = cudaMemcpyAsync(d_qElePrep, qElePrep, bytes, cudaMemcpyHostToDevice, stream);
+    cudaDie(err, "gpuUpdateForcing(qElePrep)");
+
+    err = cudaMemcpyAsync(d_qEleNetPrep, qEleNetPrep, bytes, cudaMemcpyHostToDevice, stream);
     cudaDie(err, "gpuUpdateForcing(qEleNetPrep)");
     err = cudaMemcpyAsync(d_qPotEvap, qPotEvap, bytes, cudaMemcpyHostToDevice, stream);
     cudaDie(err, "gpuUpdateForcing(qPotEvap)");
@@ -941,6 +1105,33 @@ void Model_Data::gpuUpdateForcing()
     cudaDie(err, "gpuUpdateForcing(fu_Surf)");
     err = cudaMemcpyAsync(d_fu_Sub, fu_Sub, bytes, cudaMemcpyHostToDevice, stream);
     cudaDie(err, "gpuUpdateForcing(fu_Sub)");
+
+    if (d_ele_yBC != nullptr && d_ele_QBC != nullptr) {
+        std::vector<double> h_ele_yBC(static_cast<size_t>(NumEle));
+        std::vector<double> h_ele_QBC(static_cast<size_t>(NumEle));
+        for (int i = 0; i < NumEle; i++) {
+            h_ele_yBC[static_cast<size_t>(i)] = Ele[i].yBC;
+            h_ele_QBC[static_cast<size_t>(i)] = Ele[i].QBC;
+        }
+        err = cudaMemcpyAsync(d_ele_yBC, h_ele_yBC.data(), bytes, cudaMemcpyHostToDevice, stream);
+        cudaDie(err, "gpuUpdateForcing(ele_yBC)");
+        err = cudaMemcpyAsync(d_ele_QBC, h_ele_QBC.data(), bytes, cudaMemcpyHostToDevice, stream);
+        cudaDie(err, "gpuUpdateForcing(ele_QBC)");
+    }
+
+    if (NumRiv > 0 && d_riv_yBC != nullptr && d_riv_qBC != nullptr) {
+        const size_t bytes_riv = static_cast<size_t>(NumRiv) * sizeof(double);
+        std::vector<double> h_riv_yBC(static_cast<size_t>(NumRiv));
+        std::vector<double> h_riv_qBC(static_cast<size_t>(NumRiv));
+        for (int i = 0; i < NumRiv; i++) {
+            h_riv_yBC[static_cast<size_t>(i)] = Riv[i].yBC;
+            h_riv_qBC[static_cast<size_t>(i)] = Riv[i].qBC;
+        }
+        err = cudaMemcpyAsync(d_riv_yBC, h_riv_yBC.data(), bytes_riv, cudaMemcpyHostToDevice, stream);
+        cudaDie(err, "gpuUpdateForcing(riv_yBC)");
+        err = cudaMemcpyAsync(d_riv_qBC, h_riv_qBC.data(), bytes_riv, cudaMemcpyHostToDevice, stream);
+        cudaDie(err, "gpuUpdateForcing(riv_qBC)");
+    }
 
     err = cudaEventRecord(forcing_copy_event, stream);
     cudaDie(err, "gpuUpdateForcing(cudaEventRecord)");

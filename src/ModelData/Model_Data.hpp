@@ -204,6 +204,8 @@ public:
 #ifdef _CUDA_ON
     cudaStream_t cuda_stream = nullptr;
     cudaEvent_t forcing_copy_event = nullptr;
+    DeviceModel *h_model = nullptr; /* Host mirror of device pointers (for cudaMemsetAsync, debugging). */
+    double *d_qElePrep = nullptr;
     double *d_qEleNetPrep = nullptr;
     double *d_qPotEvap = nullptr;
     double *d_qPotTran = nullptr;
@@ -211,6 +213,10 @@ public:
     double *d_t_lai = nullptr;
     double *d_fu_Surf = nullptr;
     double *d_fu_Sub = nullptr;
+    double *d_ele_yBC = nullptr;
+    double *d_ele_QBC = nullptr;
+    double *d_riv_yBC = nullptr;
+    double *d_riv_qBC = nullptr;
     unsigned long nForcingStep = 0;
     unsigned long nGpuForcingCopy = 0;
 #endif
@@ -285,6 +291,7 @@ public:
     void f_etFlux(int i, double t);
     void ET(double t, double tnext);
     void updateAllTimeSeries(double t_min);
+    void updateBC(double t);
     void updateforcing(double t);
 #ifdef _CUDA_ON
     void gpuUpdateForcing();

@@ -3,6 +3,7 @@
 #ifdef _CUDA_ON
 
 #include "rhs_kernels.hpp"
+#include "Nvtx.hpp"
 
 #include <cuda_runtime_api.h>
 #include <cstdio>
@@ -15,6 +16,7 @@
 
 int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
 {
+    shud_nvtx::scoped_range range("f_cuda");
     Model_Data *md = static_cast<Model_Data *>(user_data);
     if (md == nullptr) {
         return -1;
@@ -48,6 +50,7 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
     const cudaStream_t rhs_stream = N_VGetCudaStream_Cuda(ydot);
     const cudaStream_t y_stream = N_VGetCudaStream_Cuda(y);
     if (y_stream != rhs_stream) {
+        shud_nvtx::scoped_range sync_range("f_cuda/sync_y_stream");
         const cudaError_t err = cudaStreamSynchronize(y_stream);
         if (err != cudaSuccess) {
             fprintf(stderr,
@@ -57,6 +60,7 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
         }
     }
     if (md->cuda_stream != rhs_stream && md->forcing_copy_event != nullptr && md->nGpuForcingCopy > 0) {
+        shud_nvtx::scoped_range wait_range("f_cuda/wait_forcing_event");
         const cudaError_t err = cudaStreamWaitEvent(rhs_stream, md->forcing_copy_event, 0);
         if (err != cudaSuccess) {
             fprintf(stderr,

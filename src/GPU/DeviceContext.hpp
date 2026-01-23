@@ -19,7 +19,10 @@ struct DeviceModel {
 
     int *ele_nabr = nullptr;      /* [NumEle * 3] */
     int *ele_lakenabr = nullptr;  /* [NumEle * 3] */
+    int *ele_nabrToMe = nullptr;  /* [NumEle * 3] */
     double *ele_edge = nullptr;   /* [NumEle * 3] */
+    double *ele_Dist2Nabor = nullptr; /* [NumEle * 3] */
+    double *ele_avgRough = nullptr;   /* [NumEle * 3] */
 
     double *ele_AquiferDepth = nullptr;
     double *ele_Sy = nullptr;
@@ -28,27 +31,44 @@ struct DeviceModel {
     double *ele_ThetaS = nullptr;
     double *ele_ThetaR = nullptr;
     double *ele_ThetaFC = nullptr;
+    double *ele_Alpha = nullptr;
+    double *ele_Beta = nullptr;
+    double *ele_hAreaF = nullptr;
+    double *ele_macKsatV = nullptr;
     double *ele_KsatH = nullptr;
+    double *ele_KsatV = nullptr;
+    double *ele_geo_vAreaF = nullptr;
     double *ele_macKsatH = nullptr;
     double *ele_macD = nullptr;
     double *ele_VegFrac = nullptr;
     double *ele_ImpAF = nullptr;
+    int *ele_iLake = nullptr;
+    int *ele_iBC = nullptr;
+    int *ele_iSS = nullptr;
+    double *ele_QBC = nullptr;
+    double *ele_QSS = nullptr;
 
     /* River static parameters */
     int *riv_down_raw = nullptr;
     int *riv_toLake = nullptr;
+    int *riv_BC = nullptr;
     double *riv_Length = nullptr;
     double *riv_depth = nullptr;
     double *riv_BankSlope = nullptr;
     double *riv_BottomWidth = nullptr;
     double *riv_BedSlope = nullptr;
     double *riv_rivRough = nullptr;
+    double *riv_qBC = nullptr;
+    double *riv_zbed = nullptr;
+    double *riv_zbank = nullptr;
 
     /* Segment parameters */
     int *seg_iEle = nullptr;
     int *seg_iRiv = nullptr;
     double *seg_length = nullptr;
     double *seg_Cwr = nullptr;
+    double *seg_KsatH = nullptr;
+    double *seg_eqDistance = nullptr;
 
     /* Lake parameters */
     double *lake_zmin = nullptr;
@@ -94,4 +114,3 @@ void gpuFree(Model_Data *md);
 #endif
 
 #endif /* SHUD_GPU_DEVICECONTEXT_HPP */
-

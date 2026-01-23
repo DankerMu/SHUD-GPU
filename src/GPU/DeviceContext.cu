@@ -64,7 +64,10 @@ void freeDeviceBuffers(DeviceModel &h)
 
     cudaFreeIfNotNull(h.ele_nabr);
     cudaFreeIfNotNull(h.ele_lakenabr);
+    cudaFreeIfNotNull(h.ele_nabrToMe);
     cudaFreeIfNotNull(h.ele_edge);
+    cudaFreeIfNotNull(h.ele_Dist2Nabor);
+    cudaFreeIfNotNull(h.ele_avgRough);
 
     cudaFreeIfNotNull(h.ele_AquiferDepth);
     cudaFreeIfNotNull(h.ele_Sy);
@@ -73,25 +76,42 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.ele_ThetaS);
     cudaFreeIfNotNull(h.ele_ThetaR);
     cudaFreeIfNotNull(h.ele_ThetaFC);
+    cudaFreeIfNotNull(h.ele_Alpha);
+    cudaFreeIfNotNull(h.ele_Beta);
+    cudaFreeIfNotNull(h.ele_hAreaF);
+    cudaFreeIfNotNull(h.ele_macKsatV);
     cudaFreeIfNotNull(h.ele_KsatH);
+    cudaFreeIfNotNull(h.ele_KsatV);
+    cudaFreeIfNotNull(h.ele_geo_vAreaF);
     cudaFreeIfNotNull(h.ele_macKsatH);
     cudaFreeIfNotNull(h.ele_macD);
     cudaFreeIfNotNull(h.ele_VegFrac);
     cudaFreeIfNotNull(h.ele_ImpAF);
+    cudaFreeIfNotNull(h.ele_iLake);
+    cudaFreeIfNotNull(h.ele_iBC);
+    cudaFreeIfNotNull(h.ele_iSS);
+    cudaFreeIfNotNull(h.ele_QBC);
+    cudaFreeIfNotNull(h.ele_QSS);
 
     cudaFreeIfNotNull(h.riv_down_raw);
     cudaFreeIfNotNull(h.riv_toLake);
+    cudaFreeIfNotNull(h.riv_BC);
     cudaFreeIfNotNull(h.riv_Length);
     cudaFreeIfNotNull(h.riv_depth);
     cudaFreeIfNotNull(h.riv_BankSlope);
     cudaFreeIfNotNull(h.riv_BottomWidth);
     cudaFreeIfNotNull(h.riv_BedSlope);
     cudaFreeIfNotNull(h.riv_rivRough);
+    cudaFreeIfNotNull(h.riv_qBC);
+    cudaFreeIfNotNull(h.riv_zbed);
+    cudaFreeIfNotNull(h.riv_zbank);
 
     cudaFreeIfNotNull(h.seg_iEle);
     cudaFreeIfNotNull(h.seg_iRiv);
     cudaFreeIfNotNull(h.seg_length);
     cudaFreeIfNotNull(h.seg_Cwr);
+    cudaFreeIfNotNull(h.seg_KsatH);
+    cudaFreeIfNotNull(h.seg_eqDistance);
 
     cudaFreeIfNotNull(h.lake_zmin);
     cudaFreeIfNotNull(h.lake_invNumEle);
@@ -159,7 +179,10 @@ void gpuInit(Model_Data *md)
 
     std::vector<int> ele_nabr(static_cast<size_t>(h.NumEle) * 3);
     std::vector<int> ele_lakenabr(static_cast<size_t>(h.NumEle) * 3);
+    std::vector<int> ele_nabrToMe(static_cast<size_t>(h.NumEle) * 3);
     std::vector<double> ele_edge(static_cast<size_t>(h.NumEle) * 3);
+    std::vector<double> ele_Dist2Nabor(static_cast<size_t>(h.NumEle) * 3);
+    std::vector<double> ele_avgRough(static_cast<size_t>(h.NumEle) * 3);
 
     std::vector<double> ele_AquiferDepth(h.NumEle);
     std::vector<double> ele_Sy(h.NumEle);
@@ -168,11 +191,22 @@ void gpuInit(Model_Data *md)
     std::vector<double> ele_ThetaS(h.NumEle);
     std::vector<double> ele_ThetaR(h.NumEle);
     std::vector<double> ele_ThetaFC(h.NumEle);
+    std::vector<double> ele_Alpha(h.NumEle);
+    std::vector<double> ele_Beta(h.NumEle);
+    std::vector<double> ele_hAreaF(h.NumEle);
+    std::vector<double> ele_macKsatV(h.NumEle);
     std::vector<double> ele_KsatH(h.NumEle);
+    std::vector<double> ele_KsatV(h.NumEle);
+    std::vector<double> ele_geo_vAreaF(h.NumEle);
     std::vector<double> ele_macKsatH(h.NumEle);
     std::vector<double> ele_macD(h.NumEle);
     std::vector<double> ele_VegFrac(h.NumEle);
     std::vector<double> ele_ImpAF(h.NumEle);
+    std::vector<int> ele_iLake(h.NumEle);
+    std::vector<int> ele_iBC(h.NumEle);
+    std::vector<int> ele_iSS(h.NumEle);
+    std::vector<double> ele_QBC(h.NumEle);
+    std::vector<double> ele_QSS(h.NumEle);
 
     for (int i = 0; i < h.NumEle; i++) {
         ele_area[i] = md->Ele[i].area;
@@ -188,17 +222,31 @@ void gpuInit(Model_Data *md)
         ele_ThetaS[i] = md->Ele[i].ThetaS;
         ele_ThetaR[i] = md->Ele[i].ThetaR;
         ele_ThetaFC[i] = md->Ele[i].ThetaFC;
+        ele_Alpha[i] = md->Ele[i].Alpha;
+        ele_Beta[i] = md->Ele[i].Beta;
+        ele_hAreaF[i] = md->Ele[i].hAreaF;
+        ele_macKsatV[i] = md->Ele[i].macKsatV;
         ele_KsatH[i] = md->Ele[i].KsatH;
+        ele_KsatV[i] = md->Ele[i].KsatV;
+        ele_geo_vAreaF[i] = md->Ele[i].geo_vAreaF;
         ele_macKsatH[i] = md->Ele[i].macKsatH;
         ele_macD[i] = md->Ele[i].macD;
         ele_VegFrac[i] = md->Ele[i].VegFrac;
         ele_ImpAF[i] = md->Ele[i].ImpAF;
+        ele_iLake[i] = md->Ele[i].iLake;
+        ele_iBC[i] = md->Ele[i].iBC;
+        ele_iSS[i] = md->Ele[i].iSS;
+        ele_QBC[i] = md->Ele[i].QBC;
+        ele_QSS[i] = md->Ele[i].QSS;
 
         for (int j = 0; j < 3; j++) {
             const size_t idx = static_cast<size_t>(i) * 3 + j;
             ele_nabr[idx] = md->Ele[i].nabr[j];
             ele_lakenabr[idx] = md->Ele[i].lakenabr[j];
+            ele_nabrToMe[idx] = md->Ele[i].nabrToMe[j];
             ele_edge[idx] = md->Ele[i].edge[j];
+            ele_Dist2Nabor[idx] = md->Ele[i].Dist2Nabor[j];
+            ele_avgRough[idx] = md->Ele[i].avgRough[j];
         }
     }
 
@@ -238,9 +286,24 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload ele_lakenabr\n");
         goto fail;
     }
+    err = cudaAllocAndUpload(&h.ele_nabrToMe, ele_nabrToMe.data(), ele_nabrToMe.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_nabrToMe\n");
+        goto fail;
+    }
     err = cudaAllocAndUpload(&h.ele_edge, ele_edge.data(), ele_edge.size());
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload ele_edge\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_Dist2Nabor, ele_Dist2Nabor.data(), ele_Dist2Nabor.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_Dist2Nabor\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_avgRough, ele_avgRough.data(), ele_avgRough.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_avgRough\n");
         goto fail;
     }
 
@@ -279,9 +342,39 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload ele_ThetaFC\n");
         goto fail;
     }
+    err = cudaAllocAndUpload(&h.ele_Alpha, ele_Alpha.data(), ele_Alpha.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_Alpha\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_Beta, ele_Beta.data(), ele_Beta.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_Beta\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_hAreaF, ele_hAreaF.data(), ele_hAreaF.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_hAreaF\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_macKsatV, ele_macKsatV.data(), ele_macKsatV.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_macKsatV\n");
+        goto fail;
+    }
     err = cudaAllocAndUpload(&h.ele_KsatH, ele_KsatH.data(), ele_KsatH.size());
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to upload ele_KsatH\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_KsatV, ele_KsatV.data(), ele_KsatV.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_KsatV\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_geo_vAreaF, ele_geo_vAreaF.data(), ele_geo_vAreaF.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_geo_vAreaF\n");
         goto fail;
     }
     err = cudaAllocAndUpload(&h.ele_macKsatH, ele_macKsatH.data(), ele_macKsatH.size());
@@ -304,27 +397,60 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to upload ele_ImpAF\n");
         goto fail;
     }
+    err = cudaAllocAndUpload(&h.ele_iLake, ele_iLake.data(), ele_iLake.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_iLake\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_iBC, ele_iBC.data(), ele_iBC.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_iBC\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_iSS, ele_iSS.data(), ele_iSS.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_iSS\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_QBC, ele_QBC.data(), ele_QBC.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_QBC\n");
+        goto fail;
+    }
+    err = cudaAllocAndUpload(&h.ele_QSS, ele_QSS.data(), ele_QSS.size());
+    if (err != cudaSuccess) {
+        fprintf(stderr, "gpuInit: failed to upload ele_QSS\n");
+        goto fail;
+    }
 
     /* ------------------------------ River static parameters ------------------------------ */
     if (h.NumRiv > 0) {
         std::vector<int> riv_down_raw(h.NumRiv);
         std::vector<int> riv_toLake(h.NumRiv);
+        std::vector<int> riv_BC(h.NumRiv);
         std::vector<double> riv_Length(h.NumRiv);
         std::vector<double> riv_depth(h.NumRiv);
         std::vector<double> riv_BankSlope(h.NumRiv);
         std::vector<double> riv_BottomWidth(h.NumRiv);
         std::vector<double> riv_BedSlope(h.NumRiv);
         std::vector<double> riv_rivRough(h.NumRiv);
+        std::vector<double> riv_qBC(h.NumRiv);
+        std::vector<double> riv_zbed(h.NumRiv);
+        std::vector<double> riv_zbank(h.NumRiv);
 
         for (int i = 0; i < h.NumRiv; i++) {
             riv_down_raw[i] = md->Riv[i].down;
             riv_toLake[i] = md->Riv[i].toLake;
+            riv_BC[i] = md->Riv[i].BC;
             riv_Length[i] = md->Riv[i].Length;
             riv_depth[i] = md->Riv[i].depth;
             riv_BankSlope[i] = md->Riv[i].bankslope;
             riv_BottomWidth[i] = md->Riv[i].BottomWidth;
             riv_BedSlope[i] = md->Riv[i].BedSlope;
             riv_rivRough[i] = md->Riv[i].rivRough;
+            riv_qBC[i] = md->Riv[i].qBC;
+            riv_zbed[i] = md->Riv[i].zbed;
+            riv_zbank[i] = md->Riv[i].zbank;
         }
 
         err = cudaAllocAndUpload(&h.riv_down_raw, riv_down_raw.data(), riv_down_raw.size());
@@ -335,6 +461,11 @@ void gpuInit(Model_Data *md)
         err = cudaAllocAndUpload(&h.riv_toLake, riv_toLake.data(), riv_toLake.size());
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to upload riv_toLake\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_BC, riv_BC.data(), riv_BC.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_BC\n");
             goto fail;
         }
         err = cudaAllocAndUpload(&h.riv_Length, riv_Length.data(), riv_Length.size());
@@ -367,6 +498,21 @@ void gpuInit(Model_Data *md)
             fprintf(stderr, "gpuInit: failed to upload riv_rivRough\n");
             goto fail;
         }
+        err = cudaAllocAndUpload(&h.riv_qBC, riv_qBC.data(), riv_qBC.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_qBC\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_zbed, riv_zbed.data(), riv_zbed.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_zbed\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_zbank, riv_zbank.data(), riv_zbank.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_zbank\n");
+            goto fail;
+        }
     }
 
     /* ------------------------------ Segment parameters ------------------------------ */
@@ -375,12 +521,16 @@ void gpuInit(Model_Data *md)
         std::vector<int> seg_iRiv(h.NumSeg);
         std::vector<double> seg_length(h.NumSeg);
         std::vector<double> seg_Cwr(h.NumSeg);
+        std::vector<double> seg_KsatH(h.NumSeg);
+        std::vector<double> seg_eqDistance(h.NumSeg);
 
         for (int i = 0; i < h.NumSeg; i++) {
             seg_iEle[i] = md->RivSeg[i].iEle;
             seg_iRiv[i] = md->RivSeg[i].iRiv;
             seg_length[i] = md->RivSeg[i].length;
             seg_Cwr[i] = md->RivSeg[i].Cwr;
+            seg_KsatH[i] = md->RivSeg[i].KsatH;
+            seg_eqDistance[i] = md->RivSeg[i].eqDistance;
         }
 
         err = cudaAllocAndUpload(&h.seg_iEle, seg_iEle.data(), seg_iEle.size());
@@ -401,6 +551,16 @@ void gpuInit(Model_Data *md)
         err = cudaAllocAndUpload(&h.seg_Cwr, seg_Cwr.data(), seg_Cwr.size());
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to upload seg_Cwr\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.seg_KsatH, seg_KsatH.data(), seg_KsatH.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload seg_KsatH\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.seg_eqDistance, seg_eqDistance.data(), seg_eqDistance.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload seg_eqDistance\n");
             goto fail;
         }
     }

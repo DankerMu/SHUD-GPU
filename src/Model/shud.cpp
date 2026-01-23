@@ -35,30 +35,6 @@ int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
 using namespace std;
 
-#ifdef _CUDA_ON
-/* CUDA build: keep RHS evaluation on CPU for now.
- * - Sync state from device -> host before calling the existing CPU RHS.
- * - Sync dY (RHS output) from host -> device before returning to CVODE.
- */
-static int f_cuda_hostrhs(double t, N_Vector y, N_Vector ydot, void *user_data)
-{
-    if (N_VGetVectorID(y) == SUNDIALS_NVEC_CUDA) {
-        N_VCopyFromDevice_Cuda(y);
-    }
-    if (N_VGetVectorID(ydot) == SUNDIALS_NVEC_CUDA) {
-        /* Ensure host_data is the authoritative copy before CPU writes. */
-        N_VCopyFromDevice_Cuda(ydot);
-    }
-
-    const int ret = f(t, y, ydot, user_data);
-
-    if (N_VGetVectorID(ydot) == SUNDIALS_NVEC_CUDA) {
-        N_VCopyToDevice_Cuda(ydot);
-    }
-    return ret;
-}
-#endif
-
 double SHUD(FileIn *fin, FileOut *fout){
     double ret = 0.;
     Model_Data  *MD;        /* Model Data                */
@@ -126,6 +102,10 @@ double SHUD(FileIn *fin, FileOut *fout){
             }
 
             gpuInit(MD);
+            if (MD->cuda_stream != nullptr) {
+                N_VSetCudaStream_Cuda(udata, MD->cuda_stream);
+                N_VSetCudaStream_Cuda(du, MD->cuda_stream);
+            }
             break;
 #else
             fprintf(stderr, "\nERROR: --backend cuda requested, but this build does not enable CUDA (NVECTOR_CUDA).\n\n");
@@ -148,11 +128,7 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->initialize_output();
     MD->PrintInit(fout->Init_bak, 0);
     MD->InitFloodAlert(fout->floodout);
-#ifdef _CUDA_ON
-    SetCVODE(mem, f_cuda_hostrhs, MD, udata, LS, sunctx);
-#else
     SetCVODE(mem, f, MD, udata, LS, sunctx);
-#endif
     /* set start time */
     t = MD->CS.StartTime;
     tnext = t;

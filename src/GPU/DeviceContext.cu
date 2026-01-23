@@ -965,4 +965,18 @@ void Model_Data::gpuWaitForcingCopy()
     cudaDie(err, "gpuWaitForcingCopy(cudaEventSynchronize)");
 }
 
+void Model_Data::gpuSyncStateFromDevice(N_Vector y)
+{
+    if (y == nullptr) {
+        return;
+    }
+
+    if (N_VGetVectorID(y) != SUNDIALS_NVEC_CUDA) {
+        return;
+    }
+
+    N_VCopyFromDevice_Cuda(y);
+    (void)N_VGetHostArrayPointer_Cuda(y);
+}
+
 #endif /* _CUDA_ON */

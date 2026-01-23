@@ -202,10 +202,7 @@ double SHUD(FileIn *fin, FileOut *fout){
         }
         //            CVODEstatus(mem, udata, t);
 #ifdef _CUDA_ON
-        if (N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA) {
-            /* Sync state back to host for CPU-side summary/output. */
-            N_VCopyFromDevice_Cuda(udata);
-        }
+        MD->gpuSyncStateFromDevice(udata);
 #endif
         MD->summary(udata);
         MD->CS.ExportResults(t);

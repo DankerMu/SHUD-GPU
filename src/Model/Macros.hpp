@@ -8,25 +8,25 @@
 #include <math.h>
 #include <vector>
 
+#include "nvector/nvector_serial.h" /* serial N_Vector types, fcts., macros */
+
+#ifdef _OPENMP_ON
+#include "omp.h"
+#include "nvector/nvector_openmp.h"
+#endif
+
 #ifdef _CUDA_ON
 #include "nvector/nvector_cuda.h"
 #endif
 
-#ifdef _OPENMP_ON
-#include "omp.h"
-#include "nvector/nvector_openmp.h" /* serial N_Vector types, fcts., macros */
-#define SET_VALUE(v, i) NV_Ith_OMP(v,i)
-#else
-#include "nvector/nvector_serial.h" /* contains the definition of type N_Vector */
-#define SET_VALUE(v, i) NV_Ith_S(v,i)
-#endif
-
-#ifdef _CUDA_ON
-/* NVECTOR_CUDA does not provide NV_DATA_* macros. Keep existing code paths
- * (NV_DATA_S / NV_Ith_S) working by dispatching to host data for CUDA vectors.
+/* Runtime host-data dispatch for N_Vector implementations.
  *
- * Note: In CUDA builds we may still create serial vectors (e.g. uncoupled mode),
- * so this must be a runtime dispatch based on N_Vector_ID.
+ * - NVECTOR_CUDA does not provide NV_DATA_* macros.
+ * - When OpenMP is enabled at compile time, we may still create serial vectors
+ *   at runtime (e.g., `--backend cpu`).
+ *
+ * Keep existing CPU code paths (NV_DATA_S / NV_DATA_OMP / NV_Ith_*) working by
+ * dispatching based on N_Vector_ID.
  */
 static inline realtype* SHUD_NVecHostData(N_Vector v)
 {
@@ -34,18 +34,32 @@ static inline realtype* SHUD_NVecHostData(N_Vector v)
         return NULL;
     }
     const N_Vector_ID id = N_VGetVectorID(v);
+#ifdef _CUDA_ON
     if (id == SUNDIALS_NVEC_CUDA) {
         return N_VGetHostArrayPointer_Cuda(v);
     }
+#endif
+#ifdef _OPENMP_ON
+    if (id == SUNDIALS_NVEC_OPENMP) {
+        return NV_CONTENT_OMP(v)->data;
+    }
+#endif
     /* Fallback: treat as serial. */
     return NV_CONTENT_S(v)->data;
 }
 
-/* Override NV_DATA_S so existing CPU code can work with CUDA vectors via host
- * arrays (paired with explicit N_VCopy{From,To}Device_Cuda in shud.cpp).
- */
 #undef NV_DATA_S
 #define NV_DATA_S(v) SHUD_NVecHostData(v)
+
+#ifdef _OPENMP_ON
+#undef NV_DATA_OMP
+#define NV_DATA_OMP(v) SHUD_NVecHostData(v)
+#endif
+
+#ifdef _OPENMP_ON
+#define SET_VALUE(v, i) NV_Ith_OMP(v, i)
+#else
+#define SET_VALUE(v, i) NV_Ith_S(v, i)
 #endif
 
 /*========index===============*/
@@ -127,6 +141,9 @@ extern int global_fflush_mode;
 extern int global_implicit_mode;
 extern int global_verbose_mode;
 extern int lakeon;
+
+enum Backend { BACKEND_CPU = 0, BACKEND_OMP = 1, BACKEND_CUDA = 2 };
+extern int global_backend;
 /* ClampPolicy: whether to clamp state variables to non-negative values before flux computation.
  * 1 (default): clamp enabled. 0: clamp disabled (legacy serial behavior).
  *

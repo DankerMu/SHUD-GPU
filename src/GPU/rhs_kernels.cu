@@ -386,17 +386,38 @@ __device__ inline double blockReduceSum(double v, double *shared)
 
 __device__ inline void warpAggregatedAtomicAdd(double *dst, int idx, double v)
 {
-    const unsigned active = __activemask();
-    const int key = (dst != nullptr && idx >= 0) ? idx : -1;
-    const double val = (key >= 0) ? v : 0.0;
-
-    const unsigned group = __match_any_sync(active, key);
-    const double sum = __reduce_add_sync(group, val);
-    const int leader = __ffs(group) - 1;
-    const int lane = threadIdx.x & (warpSize - 1);
-    if (lane == leader && key >= 0) {
-        atomicAdd(&dst[key], sum);
+    if (dst == nullptr || idx < 0) {
+        return;
     }
+
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 700)
+    const unsigned active = __activemask();
+    const unsigned group = __match_any_sync(active, idx);
+    const int lane = threadIdx.x & (warpSize - 1);
+    const unsigned self_mask = 1u << lane;
+
+    if (group == self_mask) {
+        atomicAdd(&dst[idx], v);
+        return;
+    }
+
+    const int leader = __ffs(group) - 1;
+    double sum = 0.0;
+    unsigned remaining = group;
+    while (remaining) {
+        const int src = __ffs(remaining) - 1;
+        const double x = __shfl_sync(group, v, src);
+        if (lane == leader) {
+            sum += x;
+        }
+        remaining &= (remaining - 1);
+    }
+    if (lane == leader) {
+        atomicAdd(&dst[idx], sum);
+    }
+#else
+    atomicAdd(&dst[idx], v);
+#endif
 }
 
 template <int kTableSize>

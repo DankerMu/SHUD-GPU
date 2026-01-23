@@ -359,6 +359,116 @@ __device__ inline double fun_CrossPerem(double y, double w0, double s) { return 
 
 __device__ inline double fun_TopWidth(double y, double w0, double s) { return y * s * 2.0 + w0; }
 
+__device__ inline double warpReduceSum(double v, unsigned mask = 0xFFFFFFFFu)
+{
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(mask, v, offset);
+    }
+    return v;
+}
+
+__device__ inline double blockReduceSum(double v, double *shared)
+{
+    const int lane = threadIdx.x & (warpSize - 1);
+    const int wid = threadIdx.x / warpSize;
+
+    v = warpReduceSum(v);
+    if (lane == 0) {
+        shared[wid] = v;
+    }
+    __syncthreads();
+
+    v = (threadIdx.x < (blockDim.x + warpSize - 1) / warpSize) ? shared[lane] : 0.0;
+    if (wid == 0) {
+        v = warpReduceSum(v);
+    }
+    return v;
+}
+
+__device__ inline void warpAggregatedAtomicAdd(double *dst, int idx, double v)
+{
+    if (dst == nullptr || idx < 0) {
+        return;
+    }
+
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 700)
+    const unsigned active = __activemask();
+    const unsigned group = __match_any_sync(active, idx);
+    const int lane = threadIdx.x & (warpSize - 1);
+    const unsigned self_mask = 1u << lane;
+
+    if (group == self_mask) {
+        atomicAdd(&dst[idx], v);
+        return;
+    }
+
+    const int leader = __ffs(group) - 1;
+    double sum = 0.0;
+    unsigned remaining = group;
+    while (remaining) {
+        const int src = __ffs(remaining) - 1;
+        const double x = __shfl_sync(group, v, src);
+        if (lane == leader) {
+            sum += x;
+        }
+        remaining &= (remaining - 1);
+    }
+    if (lane == leader) {
+        atomicAdd(&dst[idx], sum);
+    }
+#else
+    atomicAdd(&dst[idx], v);
+#endif
+}
+
+template <int kTableSize>
+__device__ inline void blockHashInit(int *keys, double *vals)
+{
+    for (int slot = threadIdx.x; slot < kTableSize; slot += blockDim.x) {
+        keys[slot] = -1;
+        vals[slot] = 0.0;
+    }
+    __syncthreads();
+}
+
+template <int kTableSize>
+__device__ inline void blockHashAccumulate(int *keys, double *vals, double *dst, int key, double v)
+{
+    if (dst == nullptr || key < 0) {
+        return;
+    }
+
+    unsigned int slot = (static_cast<unsigned int>(key) * 2654435761u) & (kTableSize - 1);
+    for (int probe = 0; probe < kTableSize; probe++) {
+        const int prev = atomicCAS(&keys[slot], -1, key);
+        if (prev == -1 || prev == key) {
+            atomicAdd(&vals[slot], v);
+            return;
+        }
+        slot = (slot + 1) & (kTableSize - 1);
+    }
+
+    atomicAdd(&dst[key], v);
+}
+
+template <int kTableSize>
+__device__ inline void blockHashFlush(int *keys, double *vals, double *dst)
+{
+    __syncthreads();
+    if (dst == nullptr) {
+        return;
+    }
+    for (int slot = threadIdx.x; slot < kTableSize; slot += blockDim.x) {
+        const int key = keys[slot];
+        if (key >= 0) {
+            const double v = vals[slot];
+            if (v != 0.0) {
+                atomicAdd(&dst[key], v);
+            }
+        }
+    }
+}
+
 __device__ inline double quadratic(double s, double w, double dA)
 {
     const double ss = fabs(s);
@@ -402,6 +512,43 @@ __device__ inline double lake_toparea(const DeviceModel *m, int lake_idx, double
         ta = m->bathy_ai[off + i];
     }
     return ta;
+}
+
+__global__ void k_zero_flux_accumulators(const DeviceModel *m)
+{
+    if (m == nullptr) {
+        return;
+    }
+
+    const int nEle = m->NumEle;
+    const int nRiv = m->NumRiv;
+    const int nLake = m->NumLake;
+    int maxN = nEle;
+    if (nRiv > maxN) maxN = nRiv;
+    if (nLake > maxN) maxN = nLake;
+    if (maxN <= 0) {
+        return;
+    }
+
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < maxN; i += blockDim.x * gridDim.x) {
+        if (i < nEle) {
+            if (m->Qe2r_Surf != nullptr) m->Qe2r_Surf[i] = 0.0;
+            if (m->Qe2r_Sub != nullptr) m->Qe2r_Sub[i] = 0.0;
+        }
+        if (i < nRiv) {
+            if (m->QrivSurf != nullptr) m->QrivSurf[i] = 0.0;
+            if (m->QrivSub != nullptr) m->QrivSub[i] = 0.0;
+            if (m->QrivUp != nullptr) m->QrivUp[i] = 0.0;
+        }
+        if (i < nLake) {
+            if (m->QLakeSurf != nullptr) m->QLakeSurf[i] = 0.0;
+            if (m->QLakeSub != nullptr) m->QLakeSub[i] = 0.0;
+            if (m->QLakeRivIn != nullptr) m->QLakeRivIn[i] = 0.0;
+            if (m->QLakeRivOut != nullptr) m->QLakeRivOut[i] = 0.0;
+            if (m->qLakePrcp != nullptr) m->qLakePrcp[i] = 0.0;
+            if (m->qLakeEvap != nullptr) m->qLakeEvap[i] = 0.0;
+        }
+    }
 }
 
 __global__ void k_apply_bc_and_sanitize_state(const realtype *dY, const DeviceModel *m, int clamp_policy)
@@ -651,10 +798,17 @@ __global__ void k_ele_edge_surface(const DeviceModel *m)
         return;
     }
 
+    constexpr int kLakeHashSize = 256;
+    __shared__ int lake_keys[kLakeHashSize];
+    __shared__ double lake_vals[kLakeHashSize];
+    const bool do_lake_accum = (m->QLakeSurf != nullptr);
+    if (do_lake_accum) {
+        blockHashInit<kLakeHashSize>(lake_keys, lake_vals);
+    }
+
     const int n = m->NumEle * 3;
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += blockDim.x * gridDim.x) {
         const int i = idx / 3;
-        const int j = idx - i * 3;
         const int inabr = (m->ele_nabr != nullptr) ? (m->ele_nabr[idx] - 1) : -1;
         const int ilake = (m->ele_lakenabr != nullptr) ? (m->ele_lakenabr[idx] - 1) : -1;
         const double isf = d_max(0.0, (m->uYsf != nullptr) ? m->uYsf[i] : 0.0);
@@ -672,8 +826,8 @@ __global__ void k_ele_edge_surface(const DeviceModel *m)
                               0.6,
                               B,
                               0.01);
-            if (m->QLakeSurf != nullptr) {
-                atomicAdd(&m->QLakeSurf[ilake], Q);
+            if (do_lake_accum) {
+                blockHashAccumulate<kLakeHashSize>(lake_keys, lake_vals, m->QLakeSurf, ilake, Q);
             }
         } else if (inabr >= 0) {
             double nsf = (m->uYsf != nullptr) ? m->uYsf[inabr] : 0.0;
@@ -711,6 +865,10 @@ __global__ void k_ele_edge_surface(const DeviceModel *m)
             m->QeleSurf[idx] = Q;
         }
     }
+
+    if (do_lake_accum) {
+        blockHashFlush<kLakeHashSize>(lake_keys, lake_vals, m->QLakeSurf);
+    }
 }
 
 __global__ void k_ele_edge_sub(const DeviceModel *m)
@@ -719,10 +877,17 @@ __global__ void k_ele_edge_sub(const DeviceModel *m)
         return;
     }
 
+    constexpr int kLakeHashSize = 256;
+    __shared__ int lake_keys[kLakeHashSize];
+    __shared__ double lake_vals[kLakeHashSize];
+    const bool do_lake_accum = (m->QLakeSub != nullptr);
+    if (do_lake_accum) {
+        blockHashInit<kLakeHashSize>(lake_keys, lake_vals);
+    }
+
     const int n = m->NumEle * 3;
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += blockDim.x * gridDim.x) {
         const int i = idx / 3;
-        const int j = idx - i * 3;
         const int inabr = (m->ele_nabr != nullptr) ? (m->ele_nabr[idx] - 1) : -1;
         const int ilake = (m->ele_lakenabr != nullptr) ? (m->ele_lakenabr[idx] - 1) : -1;
 
@@ -746,8 +911,8 @@ __global__ void k_ele_edge_sub(const DeviceModel *m)
                     0.5 * ((m->ele_effKH != nullptr && inabr >= 0) ? m->ele_effKH[inabr] : 0.0);
                 Q = Kmean * grad * Ymean * edge;
             }
-            if (m->QLakeSub != nullptr) {
-                atomicAdd(&m->QLakeSub[ilake], Q);
+            if (do_lake_accum) {
+                blockHashAccumulate<kLakeHashSize>(lake_keys, lake_vals, m->QLakeSub, ilake, Q);
             }
         } else if (inabr >= 0) {
             const double ygw_n = (m->uYgw != nullptr) ? m->uYgw[inabr] : 0.0;
@@ -780,6 +945,10 @@ __global__ void k_ele_edge_sub(const DeviceModel *m)
         if (m->QeleSub != nullptr) {
             m->QeleSub[idx] = Q * fu_sub;
         }
+    }
+
+    if (do_lake_accum) {
+        blockHashFlush<kLakeHashSize>(lake_keys, lake_vals, m->QLakeSub);
     }
 }
 
@@ -860,9 +1029,7 @@ __global__ void k_river_down_and_up(const DeviceModel *m)
             const double s = m->riv_BedSlope[i] + yriv * 2.0 / m->riv_Length[i];
             const double R = (CSperem <= 0.0) ? 0.0 : (CSarea / CSperem);
             Qdown = manningEquation(CSarea, n, R, s);
-            if (m->QLakeRivIn != nullptr) {
-                atomicAdd(&m->QLakeRivIn[toLake], Qdown);
-            }
+            warpAggregatedAtomicAdd(m->QLakeRivIn, toLake, Qdown);
         } else if (iDown >= 0) {
             const double sMean = 0.5 * (m->riv_BedSlope[i] + m->riv_BedSlope[iDown]);
             const double Distance = (m->riv_Dist2DownStream != nullptr) ? m->riv_Dist2DownStream[i] : m->riv_Length[i];
@@ -891,9 +1058,7 @@ __global__ void k_river_down_and_up(const DeviceModel *m)
         if (m->QrivDown != nullptr) {
             m->QrivDown[i] = Qdown;
         }
-        if (m->QrivUp != nullptr && iDown >= 0) {
-            atomicAdd(&m->QrivUp[iDown], -Qdown);
-        }
+        warpAggregatedAtomicAdd(m->QrivUp, iDown, -Qdown);
     }
 }
 
@@ -1032,27 +1197,16 @@ void launch_rhs_kernels(realtype t,
     constexpr int kBlockSize = 256;
     const auto cap_blocks = [](int blocks) { return (blocks > 65535) ? 65535 : blocks; };
 
-    {
+{
         shud_nvtx::scoped_range stage_range("RHS/0_init");
-        /* 0) memset / init (match CPU f_update semantics) */
-        if (nEle > 0) {
-            (void)cudaMemsetAsync(h_model->Qe2r_Surf, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->Qe2r_Sub, 0, static_cast<size_t>(nEle) * sizeof(double), stream);
+        /* 0) memset / init (match CPU f_update semantics) - fused kernel */
+        int maxN = nEle;
+        if (nRiv > maxN) maxN = nRiv;
+        if (nLake > maxN) maxN = nLake;
+        if (maxN > 0) {
+            const int blocks = cap_blocks((maxN + kBlockSize - 1) / kBlockSize);
+            k_zero_flux_accumulators<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
-        if (nRiv > 0) {
-            (void)cudaMemsetAsync(h_model->QrivSurf, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->QrivSub, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->QrivUp, 0, static_cast<size_t>(nRiv) * sizeof(double), stream);
-        }
-        if (nLake > 0) {
-            (void)cudaMemsetAsync(h_model->QLakeSurf, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->QLakeSub, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->QLakeRivIn, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->QLakeRivOut, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->qLakePrcp, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-            (void)cudaMemsetAsync(h_model->qLakeEvap, 0, static_cast<size_t>(nLake) * sizeof(double), stream);
-        }
-        (void)cudaMemsetAsync(dYdot, 0, static_cast<size_t>(nY) * sizeof(realtype), stream);
     }
 
     {

@@ -85,6 +85,7 @@ double SHUD(FileIn *fin, FileOut *fout){
         case BACKEND_CPU:
 #ifdef _OPENMP_ON
             /* Keep OpenMP-parallel code paths deterministic-ish when using the CPU backend. */
+            MD->CS.num_threads = 1;
             omp_set_num_threads(1);
 #endif
             screeninfo("\nBackend: cpu (NVECTOR_SERIAL)\n");
@@ -267,6 +268,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 #endif
     } else {
 #ifdef _OPENMP_ON
+        MD->CS.num_threads = 1;
         omp_set_num_threads(1);
 #endif
         screeninfo("\nBackend: cpu (NVECTOR_SERIAL)\n");

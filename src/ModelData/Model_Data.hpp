@@ -22,6 +22,9 @@
 #include "SolarRadiation.hpp"
 #include "Macros.hpp"
 #include "AccTemperature.hpp"
+
+/* GPU device-side SoA model (allocated in src/GPU/DeviceContext.cu). */
+struct DeviceModel;
 using namespace std;
 class Model_Data {        /* Model_data definition */
 public:
@@ -193,6 +196,7 @@ public:
     
     long ForcStartTime;
     TimeContext Time;
+    DeviceModel *d_model = nullptr;
     
 private:
     double *t_prcp;

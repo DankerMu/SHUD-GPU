@@ -1,4 +1,7 @@
 #include "Model_Data.hpp"
+#ifdef _CUDA_ON
+#include "DeviceContext.hpp"
+#endif
 
 void Model_Data::read_calib(const char *fn){
     gc.read(fn);
@@ -770,6 +773,12 @@ void Model_Data::read_bcLake2(const char *fn){
     tsd_lqBC.read_csv();
 }
 void Model_Data::FreeData(){
+
+#ifdef _CUDA_ON
+    if (d_model != nullptr) {
+        gpuFree(this);
+    }
+#endif
     
     for (int i = 0; i < NumEle; i++) {
         delete[] QeleSurf[i] ;

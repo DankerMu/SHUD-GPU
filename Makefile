@@ -76,7 +76,8 @@ SRC    	= ${SRC_DIR}/classes/*.cpp \
 SRC_H	= ${SRC_DIR}/classes/*.hpp \
 		  ${SRC_DIR}/ModelData/*.hpp \
 		  ${SRC_DIR}/Model/*.hpp \
-		  ${SRC_DIR}/Equations/*.hpp
+		  ${SRC_DIR}/Equations/*.hpp \
+		  ${SRC_DIR}/GPU/*.hpp
 
 
 INCLUDES = -I ${SUNDIALS_DIR}/include \
@@ -84,7 +85,8 @@ INCLUDES = -I ${SUNDIALS_DIR}/include \
 		   -I ${SRC_DIR}/Model \
 		   -I ${SRC_DIR}/ModelData \
 		   -I ${SRC_DIR}/classes \
-		   -I ${SRC_DIR}/Equations 
+		   -I ${SRC_DIR}/Equations \
+		   -I ${SRC_DIR}/GPU 
 
 		  
 LIBRARIES = -L ${LIB_OMP} \
@@ -188,6 +190,5 @@ clean:
 	@echo
 	@echo "Done."
 	@echo
-
 
 

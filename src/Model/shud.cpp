@@ -11,6 +11,9 @@
 //#include "is_sm_et.hpp"
 #include "cvode_config.hpp"
 #include "Model_Data.hpp"
+#ifdef _CUDA_ON
+#include "DeviceContext.hpp"
+#endif
 #include "TimeSeriesData.hpp"
 #include "FloodAlert.hpp"
 #include "CommandIn.hpp"
@@ -121,6 +124,8 @@ double SHUD(FileIn *fin, FileOut *fout){
             } else {
                 screeninfo("NVECTOR_CUDA memory: unmanaged device memory\n");
             }
+
+            gpuInit(MD);
             break;
 #else
             fprintf(stderr, "\nERROR: --backend cuda requested, but this build does not enable CUDA (NVECTOR_CUDA).\n\n");

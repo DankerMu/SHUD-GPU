@@ -85,6 +85,14 @@ double SHUD(FileIn *fin, FileOut *fout){
         case BACKEND_CUDA:
 #ifdef _CUDA_ON
             screeninfo("\nBackend: cuda (NVECTOR_CUDA)\n");
+            {
+                static bool cuda_placeholder_warned = false;
+                if (!cuda_placeholder_warned) {
+                    screeninfo("WARNING: CUDA backend currently uses a placeholder RHS kernel.\n");
+                    screeninfo("WARNING: Results will NOT match the CPU backend.\n");
+                    cuda_placeholder_warned = true;
+                }
+            }
             udata = N_VNew_Cuda(NY, sunctx);
             du = N_VNew_Cuda(NY, sunctx);
             check_flag((void *)udata, "N_VNew_Cuda", 0);

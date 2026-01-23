@@ -71,6 +71,7 @@ CFLAGS   = -O3 -g  -std=c++14
 SRC    	= ${SRC_DIR}/classes/*.cpp \
 		  ${SRC_DIR}/ModelData/*.cpp \
 		  ${SRC_DIR}/Model/*.cpp \
+		  ${SRC_DIR}/GPU/*.cpp \
 		  ${SRC_DIR}/Equations/*.cpp
 
 SRC_H	= ${SRC_DIR}/classes/*.hpp \
@@ -190,5 +191,4 @@ clean:
 	@echo
 	@echo "Done."
 	@echo
-
 

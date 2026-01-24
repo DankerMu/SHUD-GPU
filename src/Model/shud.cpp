@@ -104,11 +104,10 @@ double SHUD(FileIn *fin, FileOut *fout){
 #ifdef _CUDA_ON
             screeninfo("\nBackend: cuda (NVECTOR_CUDA)\n");
             {
-                static bool cuda_placeholder_warned = false;
-                if (!cuda_placeholder_warned) {
-                    screeninfo("WARNING: CUDA backend currently uses a placeholder RHS kernel.\n");
-                    screeninfo("WARNING: Results will NOT match the CPU backend.\n");
-                    cuda_placeholder_warned = true;
+                static bool cuda_experimental_warned = false;
+                if (!cuda_experimental_warned) {
+                    screeninfo("NOTE: CUDA backend is experimental. Results may differ slightly from CPU.\n");
+                    cuda_experimental_warned = true;
                 }
             }
             udata = N_VNew_Cuda(NY, sunctx);

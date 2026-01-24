@@ -20,7 +20,8 @@ void CommandIn::SHUD_help(void ){
     printf (" -o output folder. Default is output/projname.out\n");
     printf (" -p projectfile, which includes the path to input files and output path.\n");
     printf (" -n Number of threads to run with OpenMP. \n");
-    printf (" --backend Runtime backend selection: cpu (default), omp, cuda.\n");
+    printf (" --backend Runtime backend selection: cpu, omp, cuda.\n");
+    printf ("          Default depends on binary: shud→cpu, shud_omp→omp, shud_cuda→cuda.\n");
     printf (" --precond Enable CVODE preconditioner (CUDA backend only; default ON for --backend cuda).\n");
     printf (" --no-precond Disable CVODE preconditioner.\n");
     printf (" --help Print this message and exit.\n");

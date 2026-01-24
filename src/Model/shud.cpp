@@ -29,7 +29,19 @@ int dummy_mode = 0;
 int global_fflush_mode = 0;
 int global_implicit_mode = 1;
 int global_verbose_mode = 1;
+/* Default backend based on compile-time configuration.
+ * - shud_cuda (_CUDA_ON): defaults to CUDA
+ * - shud_omp (_OPENMP_ON, no _CUDA_ON): defaults to OMP
+ * - shud (neither): defaults to CPU
+ * User can override via --backend flag.
+ */
+#if defined(_CUDA_ON)
+int global_backend = BACKEND_CUDA;
+#elif defined(_OPENMP_ON)
+int global_backend = BACKEND_OMP;
+#else
 int global_backend = BACKEND_CPU;
+#endif
 int global_precond_enabled = 1; /* Whether to use CVODE preconditioning (CUDA backend only). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */

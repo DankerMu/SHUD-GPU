@@ -119,19 +119,25 @@ make shud_cuda CUDA_GENCODE='-gencode arch=compute_80,code=sm_80'
 **Run on GPU**
 
 ```bash
-./shud_cuda --backend cuda ccw
+# shud_cuda defaults to --backend cuda; no flag needed
+./shud_cuda ccw
 ```
 
 **Runtime options**
 
-- `--backend cpu|omp|cuda`: select runtime backend (default `cpu`; `omp` requires an OpenMP build like `shud_omp`, `cuda` requires `shud_cuda`)
+- `--backend cpu|omp|cuda`: select runtime backend. Each binary has its own default: `shud`→cpu, `shud_omp`→omp, `shud_cuda`→cuda. Use this flag to override.
 - `--precond` / `--no-precond`: enable/disable CVODE preconditioner (CUDA backend only; default ON for `--backend cuda`)
 
 Examples:
 
 ```bash
-./shud_cuda --backend cuda --no-precond ccw
-./shud_omp --backend omp -n 8 ccw
+# Each binary uses its natural default; --backend only needed to override
+./shud_cuda ccw                        # CUDA (default for shud_cuda)
+./shud_cuda --no-precond ccw           # CUDA without preconditioner
+./shud_cuda --backend cpu ccw          # Force CPU on shud_cuda (override)
+./shud_omp ccw                         # OpenMP (default for shud_omp)
+./shud_omp -n 8 ccw                    # OpenMP with 8 threads
+./shud ccw                             # CPU serial (default for shud)
 ```
 
 **Performance monitoring (CVODE_STATS)**
@@ -139,7 +145,7 @@ Examples:
 SHUD prints a parseable CVODE statistics line at the end of the run (prefixed with `CVODE_STATS`). For performance monitoring/regression checks, grep it from stdout:
 
 ```bash
-./shud_cuda --backend cuda ccw | grep CVODE_STATS
+./shud_cuda ccw | grep CVODE_STATS
 # CVODE_STATS nfe=... nli=... nni=... netf=... npe=... nps=...
 ```
 

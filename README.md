@@ -71,19 +71,80 @@ cd SHUD
 
 This configure is to download the SUNDIALS from GitHub and install it on your computer.
 
-**Optional: CUDA-enabled build (Linux + NVIDIA CUDA Toolkit only)**
+**Optional: CUDA-enabled build (Linux + NVIDIA only)**
 
-If you want to build with CUDA (SUNDIALS `NVECTOR_CUDA`), first install a CUDA-enabled SUNDIALS:
+SHUD provides a CUDA build (`shud_cuda`) and a runtime backend switch (`--backend cuda`) to offload the RHS to GPU via SUNDIALS `NVECTOR_CUDA`.
+
+**GPU prerequisites**
+
+- NVIDIA GPU with Compute Capability (CC) >= 7.0 (sm_70+)
+- NVIDIA CUDA Toolkit >= 11.0 (`nvcc` available)
+- CMake >= 3.18 (required by `./configure_cuda`)
+- SUNDIALS/CVODE 6.x built with `ENABLE_CUDA=ON` (provides `libsundials_nveccuda`)
+
+**Step 1b: Build CUDA-enabled SUNDIALS (NVECTOR_CUDA)**
 
 ```bash
+# Default install prefix is $HOME/sundials (matches Makefile's SUNDIALS_DIR).
 SUNDIALS_PREFIX="$HOME/sundials" CUDA_ARCHS="70;75;80;86" ./configure_cuda
+
+# Verify the CUDA NVECTOR libraries exist:
+ls "$HOME/sundials/lib" | grep -E 'sundials_nveccuda|sunmemcuda' || true
 ```
 
-Then build SHUD with NVCC:
+`CUDA_ARCHS` should match your GPU (examples: 70=V100, 75=T4, 80=A100, 86=RTX30).
+
+**Step 1c: Build `shud_cuda`**
 
 ```bash
+# If CUDA is installed elsewhere, point CUDA_HOME to it.
 make shud_cuda CUDA_HOME=/usr/local/cuda
+
+# If SUNDIALS is installed elsewhere:
+# make shud_cuda SUNDIALS_DIR=/path/to/sundials CUDA_HOME=/usr/local/cuda
 ```
+
+If you see `no kernel image is available for execution on the device` / `invalid device function` at runtime, rebuild for your GPU architecture. Example for A100 (sm_80):
+
+```bash
+CUDA_ARCHS="80" SUNDIALS_PREFIX="$HOME/sundials" ./configure_cuda
+make shud_cuda CUDA_GENCODE='-gencode arch=compute_80,code=sm_80'
+```
+
+**Run on GPU**
+
+```bash
+./shud_cuda --backend cuda ccw
+```
+
+**Runtime options**
+
+- `--backend cpu|omp|cuda`: select runtime backend (default `cpu`)
+- `--precond` / `--no-precond`: enable/disable CVODE preconditioner (CUDA backend only; default ON for `--backend cuda`)
+
+Examples:
+
+```bash
+./shud_cuda --backend cuda --no-precond ccw
+./shud_cuda --backend omp -n 8 ccw
+```
+
+**Performance monitoring (CVODE_STATS)**
+
+For performance monitoring/regression checks, run with `CVODE_STATS=1` and grep the parseable CVODE statistics line printed at the end of the run:
+
+```bash
+CVODE_STATS=1 ./shud_cuda --backend cuda ccw
+# CVODE_STATS nfe=... nli=... nni=... netf=... npe=... nps=...
+```
+
+**Troubleshooting (CUDA)**
+
+- `nvcc: command not found`: install CUDA Toolkit and/or set `CUDA_HOME` and add `$CUDA_HOME/bin` to `PATH`
+- `cannot find -lsundials_nveccuda` or `--backend cuda requested, but this build does not enable CUDA`: build SUNDIALS with `./configure_cuda` and build/run `shud_cuda` (not `shud`)
+- `no kernel image is available for execution on the device` / `invalid device function`: your GPU CC is not in `CUDA_ARCHS` / `CUDA_GENCODE`; rebuild with the correct arch
+- `CUDA driver version is insufficient for CUDA runtime version`: update the NVIDIA driver or use a compatible CUDA Toolkit
+- `error while loading shared libraries: libcudart.so...`: ensure CUDA runtime libs are discoverable (e.g. `$CUDA_HOME/lib64` in `LD_LIBRARY_PATH`) and rebuild
 
 **Step 2: Compile SHUD with gcc**
 

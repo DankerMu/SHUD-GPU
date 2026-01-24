@@ -47,8 +47,8 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
      * - Model forcing H2D copies run on md->cuda_stream; if the RHS stream
      *   differs, wait on md->forcing_copy_event to ensure forcing data is ready.
      */
-    const cudaStream_t rhs_stream = N_VGetCudaStream_Cuda(ydot);
-    const cudaStream_t y_stream = N_VGetCudaStream_Cuda(y);
+    const cudaStream_t rhs_stream = SHUD_NVecCudaStream(ydot);
+    const cudaStream_t y_stream = SHUD_NVecCudaStream(y);
     if (y_stream != rhs_stream) {
         shud_nvtx::scoped_range sync_range("f_cuda/sync_y_stream");
         const cudaError_t err = cudaStreamSynchronize(y_stream);

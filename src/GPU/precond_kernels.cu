@@ -576,10 +576,10 @@ int PSetup_cuda(realtype t,
         return -1;
     }
 
-    const cudaStream_t y_stream = N_VGetCudaStream_Cuda(y);
+    const cudaStream_t y_stream = SHUD_NVecCudaStream(y);
     cudaStream_t stream = y_stream;
     if (fy != nullptr && N_VGetVectorID(fy) == SUNDIALS_NVEC_CUDA) {
-        stream = N_VGetCudaStream_Cuda(fy);
+        stream = SHUD_NVecCudaStream(fy);
         if (stream != y_stream) {
             const cudaError_t err = cudaStreamSynchronize(y_stream);
             if (err != cudaSuccess) {
@@ -672,8 +672,8 @@ int PSolve_cuda(realtype t,
         return -1;
     }
 
-    const cudaStream_t stream = N_VGetCudaStream_Cuda(z);
-    const cudaStream_t r_stream = N_VGetCudaStream_Cuda(r);
+    const cudaStream_t stream = SHUD_NVecCudaStream(z);
+    const cudaStream_t r_stream = SHUD_NVecCudaStream(r);
     if (r_stream != stream) {
         const cudaError_t err = cudaStreamSynchronize(r_stream);
         if (err != cudaSuccess) {

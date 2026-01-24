@@ -48,6 +48,23 @@ static inline realtype* SHUD_NVecHostData(N_Vector v)
     return NV_CONTENT_S(v)->data;
 }
 
+#ifdef _CUDA_ON
+static inline cudaStream_t SHUD_NVecCudaStream(N_Vector v)
+{
+    if (v == NULL) {
+        return (cudaStream_t)0;
+    }
+    if (N_VGetVectorID(v) != SUNDIALS_NVEC_CUDA) {
+        return (cudaStream_t)0;
+    }
+    N_VectorContent_Cuda content = (N_VectorContent_Cuda)v->content;
+    if (content == NULL || content->stream_exec_policy == nullptr || content->stream_exec_policy->stream() == nullptr) {
+        return (cudaStream_t)0;
+    }
+    return *(content->stream_exec_policy->stream());
+}
+#endif
+
 #undef NV_DATA_S
 #define NV_DATA_S(v) SHUD_NVecHostData(v)
 
@@ -141,6 +158,8 @@ extern int global_fflush_mode;
 extern int global_implicit_mode;
 extern int global_verbose_mode;
 extern int lakeon;
+/* Whether to enable CVODE preconditioning (CUDA backend only). */
+extern int global_precond_enabled;
 
 enum Backend { BACKEND_CPU = 0, BACKEND_OMP = 1, BACKEND_CUDA = 2 };
 extern int global_backend;

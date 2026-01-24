@@ -204,6 +204,7 @@ public:
 #ifdef _CUDA_ON
     cudaStream_t cuda_stream = nullptr;
     cudaEvent_t forcing_copy_event = nullptr;
+    cudaEvent_t precond_setup_event = nullptr;
     DeviceModel *h_model = nullptr; /* Host mirror of device pointers (for cudaMemsetAsync, debugging). */
     double *d_qElePrep = nullptr;
     double *d_qEleNetPrep = nullptr;
@@ -219,6 +220,7 @@ public:
     double *d_riv_qBC = nullptr;
     unsigned long nForcingStep = 0;
     unsigned long nGpuForcingCopy = 0;
+    unsigned long nGpuPrecSetup = 0;
 #endif
     
 private:

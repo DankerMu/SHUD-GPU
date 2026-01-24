@@ -114,6 +114,7 @@ inline double Eudist(double x1, double y1, double x2, double y2){
     double d = sqrt(dx * dx + dy * dy);
     return d;
 }
+#ifndef __CUDACC__
 inline double min(double a, double b){
     return (a > b ? b : a);
 }
@@ -121,6 +122,7 @@ inline
 double max(double a, double b){
     return (a < b ? b : a);
 }
+#endif
 
 inline double Quadratic(double s, double w, double dA){
     /* dA can be positive or negative. */
@@ -224,6 +226,5 @@ void checkExchangeValue(double **x, int i, int j, int inabr, int jnabr){
     }
 }
 #endif /* functions_h */
-
 
 

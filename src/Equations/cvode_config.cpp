@@ -1,5 +1,6 @@
 
 #include "cvode_config.hpp"
+#include "precond_kernels.hpp"
 
 int check_flag(void *flagvalue, const char *funcname, int opt)
 {
@@ -172,12 +173,27 @@ void SetCVODE(void * &cvode_mem, CVRhsFn f, Model_Data *MD,  N_Vector udata, SUN
     flag = CVodeSStolerances(cvode_mem, MD->CS.reltol, MD->CS.abstol);
     check_flag(&flag, "CVodeSStolerances", 1);
     
+    const bool use_cuda_precond =
+#ifdef _CUDA_ON
+        (global_backend == BACKEND_CUDA && global_precond_enabled &&
+         N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA);
+#else
+        false;
+#endif
+
     //    LS = SUNSPGMR(udata, 0, 0); //v3.x
-    LS = SUNLinSol_SPGMR(udata, 0, 0, sunctx);
+    LS = SUNLinSol_SPGMR(udata, use_cuda_precond ? PREC_LEFT : PREC_NONE, 0, sunctx);
     check_flag((void *)LS, "SUNLinSol_SPGMR", 0);
     
     flag = CVodeSetLinearSolver(cvode_mem, LS, NULL);
     check_flag(&flag, "CVSpilsSetLinearSolver", 1);
+
+#ifdef _CUDA_ON
+    if (use_cuda_precond) {
+        flag = CVodeSetPreconditioner(cvode_mem, PSetup_cuda, PSolve_cuda);
+        check_flag(&flag, "CVodeSetPreconditioner", 1);
+    }
+#endif
     
     flag = CVodeSetMinStep(cvode_mem, 1E-6); //Minimum time interval in cvode.dt = t(i) - t(i - 1);
     check_flag(&flag, "CVodeSetMinStep", 1);

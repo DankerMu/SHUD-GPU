@@ -208,19 +208,37 @@ void gpuInit(Model_Data *md)
     if (err != cudaSuccess) {
         stream = nullptr;
         fprintf(stderr, "gpuInit: failed to create CUDA stream\n");
-        goto fail;
+        delete md->h_model;
+        md->h_model = nullptr;
+        cudaDie(err, "gpuInit(cudaStreamCreateWithFlags)");
+        return;
     }
     err = cudaEventCreateWithFlags(&forcing_event, cudaEventDisableTiming);
     if (err != cudaSuccess) {
         forcing_event = nullptr;
         fprintf(stderr, "gpuInit: failed to create CUDA event\n");
-        goto fail;
+        if (stream != nullptr) {
+            (void)cudaStreamDestroy(stream);
+        }
+        delete md->h_model;
+        md->h_model = nullptr;
+        cudaDie(err, "gpuInit(cudaEventCreateWithFlags forcing_event)");
+        return;
     }
     err = cudaEventCreateWithFlags(&precond_event, cudaEventDisableTiming);
     if (err != cudaSuccess) {
         precond_event = nullptr;
         fprintf(stderr, "gpuInit: failed to create CUDA event for preconditioner\n");
-        goto fail;
+        if (forcing_event != nullptr) {
+            (void)cudaEventDestroy(forcing_event);
+        }
+        if (stream != nullptr) {
+            (void)cudaStreamDestroy(stream);
+        }
+        delete md->h_model;
+        md->h_model = nullptr;
+        cudaDie(err, "gpuInit(cudaEventCreateWithFlags precond_event)");
+        return;
     }
     md->cuda_stream = stream;
     md->forcing_copy_event = forcing_event;
@@ -745,36 +763,36 @@ void gpuInit(Model_Data *md)
     }
 
     /* ------------------------------ Scratch arrays ------------------------------ */
-    err = cudaAllocAndUpload(&h.uYsf, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.uYsf, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate uYsf\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.uYus, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.uYus, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate uYus\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.uYgw, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.uYgw, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate uYgw\n");
         goto fail;
     }
     if (h.NumRiv > 0) {
-        err = cudaAllocAndUpload(&h.uYriv, nullptr, static_cast<size_t>(h.NumRiv));
+        err = cudaAllocAndUpload(&h.uYriv, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumRiv));
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate uYriv\n");
             goto fail;
         }
     }
     if (h.NumLake > 0) {
-        err = cudaAllocAndUpload(&h.uYlake, nullptr, static_cast<size_t>(h.NumLake));
+        err = cudaAllocAndUpload(&h.uYlake, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumLake));
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate uYlake\n");
             goto fail;
         }
     }
-    err = cudaAllocAndUpload(&h.ele_satn, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.ele_satn, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate ele_satn\n");
         goto fail;
@@ -784,7 +802,7 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to initialize ele_satn\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.ele_effKH, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.ele_effKH, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate ele_effKH\n");
         goto fail;
@@ -888,17 +906,17 @@ void gpuInit(Model_Data *md)
             goto fail;
         }
 
-        err = cudaAllocAndUpload(&h.riv_CSarea, nullptr, static_cast<size_t>(h.NumRiv));
+        err = cudaAllocAndUpload(&h.riv_CSarea, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumRiv));
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate riv_CSarea\n");
             goto fail;
         }
-        err = cudaAllocAndUpload(&h.riv_CSperem, nullptr, static_cast<size_t>(h.NumRiv));
+        err = cudaAllocAndUpload(&h.riv_CSperem, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumRiv));
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate riv_CSperem\n");
             goto fail;
         }
-        err = cudaAllocAndUpload(&h.riv_topWidth, nullptr, static_cast<size_t>(h.NumRiv));
+        err = cudaAllocAndUpload(&h.riv_topWidth, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumRiv));
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate riv_topWidth\n");
             goto fail;
@@ -944,42 +962,42 @@ void gpuInit(Model_Data *md)
     }
 
     /* ------------------------------ Forcing arrays ------------------------------ */
-    err = cudaAllocAndUpload(&h.qElePrep, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.qElePrep, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qElePrep\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.qEleNetPrep, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.qEleNetPrep, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qEleNetPrep\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.qPotEvap, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.qPotEvap, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qPotEvap\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.qPotTran, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.qPotTran, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qPotTran\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.qEleE_IC, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.qEleE_IC, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate qEleE_IC\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.t_lai, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.t_lai, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate t_lai\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.fu_Surf, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.fu_Surf, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate fu_Surf\n");
         goto fail;
     }
-    err = cudaAllocAndUpload(&h.fu_Sub, nullptr, static_cast<size_t>(h.NumEle));
+    err = cudaAllocAndUpload(&h.fu_Sub, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
     if (err != cudaSuccess) {
         fprintf(stderr, "gpuInit: failed to allocate fu_Sub\n");
         goto fail;
@@ -989,7 +1007,7 @@ void gpuInit(Model_Data *md)
     {
         const size_t prec_count = static_cast<size_t>(h.NumEle) * 9u + static_cast<size_t>(h.NumRiv) +
                                   static_cast<size_t>(h.NumLake);
-        err = cudaAllocAndUpload(&h.prec_inv, nullptr, prec_count);
+        err = cudaAllocAndUpload(&h.prec_inv, static_cast<const double *>(nullptr), prec_count);
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to allocate prec_inv\n");
             goto fail;

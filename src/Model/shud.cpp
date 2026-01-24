@@ -30,6 +30,7 @@ int global_fflush_mode = 0;
 int global_implicit_mode = 1;
 int global_verbose_mode = 1;
 int global_backend = BACKEND_CPU;
+int global_precond_enabled = 1; /* Whether to use CVODE preconditioning (CUDA backend only). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
@@ -40,6 +41,11 @@ double SHUD(FileIn *fin, FileOut *fout){
     Model_Data  *MD;        /* Model Data                */
     N_Vector    udata;
     N_Vector    du;
+
+#ifdef _CUDA_ON
+    SUNCudaExecPolicy *nvec_stream_exec_policy = nullptr;
+    SUNCudaExecPolicy *nvec_reduce_exec_policy = nullptr;
+#endif
     
     SUNContext sunctx;
     ret = SUNContext_Create(NULL, &sunctx);
@@ -111,8 +117,15 @@ double SHUD(FileIn *fin, FileOut *fout){
 
             gpuInit(MD);
             if (MD->cuda_stream != nullptr) {
-                N_VSetCudaStream_Cuda(udata, MD->cuda_stream);
-                N_VSetCudaStream_Cuda(du, MD->cuda_stream);
+                /* SUNDIALS 6.0 NVECTOR_CUDA uses kernel exec policies (stream is embedded).
+                 * Keep policies alive for the lifetime of the NVECTORs. */
+                nvec_stream_exec_policy = new SUNCudaThreadDirectExecPolicy(256, MD->cuda_stream);
+                nvec_reduce_exec_policy = new SUNCudaBlockReduceExecPolicy(256, 0, MD->cuda_stream);
+
+                int policy_flag = N_VSetKernelExecPolicy_Cuda(udata, nvec_stream_exec_policy, nvec_reduce_exec_policy);
+                check_flag(&policy_flag, "N_VSetKernelExecPolicy_Cuda", 1);
+                policy_flag = N_VSetKernelExecPolicy_Cuda(du, nvec_stream_exec_policy, nvec_reduce_exec_policy);
+                check_flag(&policy_flag, "N_VSetKernelExecPolicy_Cuda", 1);
             }
             break;
 #else
@@ -201,6 +214,8 @@ double SHUD(FileIn *fin, FileOut *fout){
         long int nli = -1;
         long int nni = -1;
         long int netf = -1;
+        long int npe = -1;
+        long int nps = -1;
 
         int stats_flag = CVodeGetNumRhsEvals(mem, &nfe);
         if (stats_flag != 0) {
@@ -222,13 +237,27 @@ double SHUD(FileIn *fin, FileOut *fout){
             fprintf(stderr, "WARNING: CVodeGetNumErrTestFails failed with flag=%d (continuing)\n", stats_flag);
         }
 
-        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld\n\n", nfe, nli, nni, netf);
+        stats_flag = CVodeGetNumPrecEvals(mem, &npe);
+        if (stats_flag != 0) {
+            fprintf(stderr, "WARNING: CVodeGetNumPrecEvals failed with flag=%d (continuing)\n", stats_flag);
+        }
+
+        stats_flag = CVodeGetNumPrecSolves(mem, &nps);
+        if (stats_flag != 0) {
+            fprintf(stderr, "WARNING: CVodeGetNumPrecSolves failed with flag=%d (continuing)\n", stats_flag);
+        }
+
+        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld\n\n", nfe, nli, nni, netf, npe, nps);
     }
 
     MD->modelSummary(1);
     /* Free memory */
     N_VDestroy(udata);
     N_VDestroy(du);
+#ifdef _CUDA_ON
+    delete nvec_stream_exec_policy;
+    delete nvec_reduce_exec_policy;
+#endif
     /* Free integrator memory */
     CVodeFree(&mem);
     SUNLinSolFree(LS);

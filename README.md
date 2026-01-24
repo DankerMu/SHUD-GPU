@@ -75,7 +75,7 @@ This configure is to download the SUNDIALS from GitHub and install it on your co
 
 SHUD provides a CUDA build (`shud_cuda`) and a runtime backend switch (`--backend cuda`) to offload the RHS to GPU via SUNDIALS `NVECTOR_CUDA`.
 
-**Note:** The CUDA backend is experimental and currently uses a placeholder RHS kernel; results will not match the CPU/OpenMP backends.
+**Note:** The CUDA backend is experimental; results may differ slightly from CPU/OpenMP backends due to floating-point precision differences.
 
 **GPU prerequisites**
 

@@ -34,6 +34,9 @@ validation/tsr/tmp/
 # Allow committing profiling scripts (this repo ignores *.sh by default)
 !profiling/**/*.sh
 
+# Allow committing benchmark scripts (this repo ignores *.sh by default)
+!scripts/**/*.sh
+
 # Python coverage artifacts
 .coverage
 htmlcov/

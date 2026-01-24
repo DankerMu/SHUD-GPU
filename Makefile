@@ -103,11 +103,11 @@ LIBRARIES = -L ${LIB_OMP} \
 			-L ${LIB_SYS}
 
 RPATH = '-Wl,-rpath,${LIB_SUN}' 
-RPATH_CUDA = '-Wl,-rpath,${LIB_SUN}' '-Wl,-rpath,${LIB_CUDA}'
+RPATH_CUDA = -Xlinker=-rpath,${LIB_SUN} -Xlinker=-rpath,${LIB_CUDA}
 
 LK_FLAGS = -lm -lsundials_cvode -lsundials_nvecserial
 LK_OMP	= -fopenmp -lsundials_nvecopenmp
-LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lsundials_sunmemcuda -lcudart -lnvToolsExt
+LK_CUDA  = -lm -lsundials_cvode -lsundials_nvecserial -lsundials_nveccuda -lcudart -lnvToolsExt
 LK_DYLN = "LD_LIBRARY_PATH=${LIB_SUN}"
 
 # Default supported GPU architectures (sm_70/75/80/86).

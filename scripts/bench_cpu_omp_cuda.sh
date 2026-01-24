@@ -93,13 +93,15 @@ echo "[config] conda_env=${CONDA_DEFAULT_ENV:-<none>}"
 run_backend() {
   local key="$1" label="$2" bin="$3"
 
-  if [[ ! -x "$bin" ]]; then
-    echo "WARN: skip ${label} (missing executable: ${bin})" >&2
-    return 0
-  fi
-
   local log_file="${LOG_DIR}/${PROJECT}_${key}.log"
   local time_file="${LOG_DIR}/${PROJECT}_${key}.time"
+
+  if [[ ! -x "$bin" ]]; then
+    echo "WARN: skip ${label} (missing executable: ${bin})" >&2
+    # Remove stale logs to avoid report using old results
+    rm -f "$log_file" "$time_file"
+    return 0
+  fi
 
   echo "[run] ${label}: ${bin} ${PROJECT}"
   if /usr/bin/time -f "%e" -o "$time_file" "$bin" "$PROJECT" >"$log_file" 2>&1; then
@@ -114,7 +116,7 @@ run_backend "cpu"  "CPU serial" "./shud"
 run_backend "omp"  "OpenMP"     "./shud_omp"
 run_backend "cuda" "CUDA"       "./shud_cuda"
 
-python "${SCRIPT_DIR}/compare_outputs.py" \
+python3 "${SCRIPT_DIR}/compare_outputs.py" \
   --project "$PROJECT" \
   --log-dir "$LOG_DIR" \
   --report "$REPORT"

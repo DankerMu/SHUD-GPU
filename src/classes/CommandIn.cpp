@@ -8,9 +8,9 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
-void CommandIn::SHUD_help(void ){
+void CommandIn::SHUD_help(const char *prog){
     printf ("\n\nUsage:\n");
-    printf ("./shud [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond] [--help] <project_name>\n\n");
+    printf ("%s [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond] [--help] <project_name>\n\n", prog);
     printf (" -0 Dummy simulation. Load input and write output, but no calculation.\n");
     printf (" -f fflush for each time interval. fflush export data frequently, but slow down performance on cluster.\n");
     printf (" -g Sequential coupled Surface-Unsaturated-Saturated-River mode.\n");
@@ -29,7 +29,7 @@ void CommandIn::SHUD_help(void ){
 
 void CommandIn::parse(int argc, char **argv){
     if(argc<=1){
-        SHUD_help();
+        SHUD_help(argv[0]);
         myexit(ERRSUCCESS);
     }
 
@@ -90,7 +90,7 @@ void CommandIn::parse(int argc, char **argv){
                 iprj = 1;
                 break;
             case 'h':
-                SHUD_help();
+                SHUD_help(argv[0]);
                 myexit(ERRSUCCESS);
                 break;
             case 1:

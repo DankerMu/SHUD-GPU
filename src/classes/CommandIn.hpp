@@ -28,6 +28,6 @@ public:
     void    setFileIO(FileIn *fin, FileOut *fout);
     int     getNumberThreads();
 private:
-    void    SHUD_help();
+    void    SHUD_help(const char *prog);
 };
 #endif /* CommandIn_hpp */

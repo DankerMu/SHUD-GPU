@@ -194,6 +194,7 @@ void gpuInit(Model_Data *md)
 
     cudaStream_t stream = nullptr;
     cudaEvent_t forcing_event = nullptr;
+    cudaEvent_t precond_event = nullptr;
     DeviceModel h{};
     h.NumEle = md->NumEle;
     h.NumRiv = md->NumRiv;
@@ -215,8 +216,17 @@ void gpuInit(Model_Data *md)
         fprintf(stderr, "gpuInit: failed to create CUDA event\n");
         goto fail;
     }
+    err = cudaEventCreateWithFlags(&precond_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        precond_event = nullptr;
+        fprintf(stderr, "gpuInit: failed to create CUDA event for preconditioner\n");
+        goto fail;
+    }
     md->cuda_stream = stream;
     md->forcing_copy_event = forcing_event;
+    md->precond_setup_event = precond_event;
+    md->nGpuForcingCopy = 0;
+    md->nGpuPrecSetup = 0;
 
     /* ------------------------------ Element static parameters ------------------------------ */
     std::vector<double> ele_area(h.NumEle);
@@ -1015,6 +1025,10 @@ void gpuInit(Model_Data *md)
     return;
 
 fail:
+    if (precond_event != nullptr) {
+        (void)cudaEventDestroy(precond_event);
+        md->precond_setup_event = nullptr;
+    }
     if (forcing_event != nullptr) {
         (void)cudaEventDestroy(forcing_event);
         md->forcing_copy_event = nullptr;
@@ -1049,6 +1063,10 @@ void gpuFree(Model_Data *md)
         (void)cudaEventDestroy(md->forcing_copy_event);
         md->forcing_copy_event = nullptr;
     }
+    if (md->precond_setup_event != nullptr) {
+        (void)cudaEventDestroy(md->precond_setup_event);
+        md->precond_setup_event = nullptr;
+    }
     if (md->cuda_stream != nullptr) {
         (void)cudaStreamDestroy(md->cuda_stream);
         md->cuda_stream = nullptr;
@@ -1066,6 +1084,8 @@ void gpuFree(Model_Data *md)
     md->d_ele_QBC = nullptr;
     md->d_riv_yBC = nullptr;
     md->d_riv_qBC = nullptr;
+
+    md->nGpuPrecSetup = 0;
 
     if (md->d_model == nullptr) {
         return;

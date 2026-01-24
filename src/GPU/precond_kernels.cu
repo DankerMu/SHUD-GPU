@@ -557,7 +557,6 @@ int PSetup_cuda(realtype t,
                 void *user_data)
 {
     (void)t;
-    (void)fy;
     (void)jok;
 
     shud_nvtx::scoped_range range("PSetup_cuda");
@@ -577,7 +576,20 @@ int PSetup_cuda(realtype t,
         return -1;
     }
 
-    const cudaStream_t stream = N_VGetCudaStream_Cuda(y);
+    const cudaStream_t y_stream = N_VGetCudaStream_Cuda(y);
+    cudaStream_t stream = y_stream;
+    if (fy != nullptr && N_VGetVectorID(fy) == SUNDIALS_NVEC_CUDA) {
+        stream = N_VGetCudaStream_Cuda(fy);
+        if (stream != y_stream) {
+            const cudaError_t err = cudaStreamSynchronize(y_stream);
+            if (err != cudaSuccess) {
+                fprintf(stderr,
+                        "CUDA_ERROR: PSetup_cuda: cudaStreamSynchronize(y_stream) failed: %s\n",
+                        cudaGetErrorString(err));
+                return -1;
+            }
+        }
+    }
     if (md->cuda_stream != stream && md->forcing_copy_event != nullptr && md->nGpuForcingCopy > 0) {
         const cudaError_t err = cudaStreamWaitEvent(stream, md->forcing_copy_event, 0);
         if (err != cudaSuccess) {
@@ -594,10 +606,28 @@ int PSetup_cuda(realtype t,
         const int blocks = cap_blocks((nBlocks + kBlockSize - 1) / kBlockSize);
         const int clamp_policy = CLAMP_POLICY;
         k_psetup<<<blocks, kBlockSize, 0, stream>>>(dY, md->d_model, static_cast<double>(gamma), clamp_policy);
-        const cudaError_t err = cudaPeekAtLastError();
-        if (err != cudaSuccess) {
-            fprintf(stderr, "CUDA_ERROR: PSetup_cuda: kernel launch failed: %s\n", cudaGetErrorString(err));
-            return -1;
+        {
+            const cudaError_t err = cudaPeekAtLastError();
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSetup_cuda: kernel launch failed: %s\n", cudaGetErrorString(err));
+                return -1;
+            }
+        }
+        {
+            const cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSetup_cuda: CUDA error before return: %s\n", cudaGetErrorString(err));
+                return -1;
+            }
+        }
+        if (md->precond_setup_event != nullptr) {
+            const cudaError_t err = cudaEventRecord(md->precond_setup_event, stream);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSetup_cuda: cudaEventRecord(precond_setup_event) failed: %s\n",
+                        cudaGetErrorString(err));
+                return -1;
+            }
+            md->nGpuPrecSetup++;
         }
     }
 
@@ -665,14 +695,43 @@ int PSolve_cuda(realtype t,
     }
 
     const int nBlocks = md->h_model->NumEle + md->h_model->NumRiv + md->h_model->NumLake;
+    if (md->nGpuPrecSetup == 0 || nBlocks <= 0) {
+        if (dZ != dR) {
+            const size_t bytes = static_cast<size_t>(md->NumY) * sizeof(realtype);
+            const cudaError_t err = cudaMemcpyAsync(dZ, dR, bytes, cudaMemcpyDeviceToDevice, stream);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSolve_cuda: cudaMemcpyAsync(D2D) failed: %s\n", cudaGetErrorString(err));
+                return -1;
+            }
+        }
+        return 0;
+    }
+    if (md->precond_setup_event != nullptr) {
+        const cudaError_t err = cudaStreamWaitEvent(stream, md->precond_setup_event, 0);
+        if (err != cudaSuccess) {
+            fprintf(stderr,
+                    "CUDA_ERROR: PSolve_cuda: cudaStreamWaitEvent(precond_setup_event) failed: %s\n",
+                    cudaGetErrorString(err));
+            return -1;
+        }
+    }
     if (nBlocks > 0) {
         constexpr int kBlockSize = 256;
         const int blocks = cap_blocks((nBlocks + kBlockSize - 1) / kBlockSize);
         k_psolve<<<blocks, kBlockSize, 0, stream>>>(dR, dZ, md->d_model);
-        const cudaError_t err = cudaPeekAtLastError();
-        if (err != cudaSuccess) {
-            fprintf(stderr, "CUDA_ERROR: PSolve_cuda: kernel launch failed: %s\n", cudaGetErrorString(err));
-            return -1;
+        {
+            const cudaError_t err = cudaPeekAtLastError();
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSolve_cuda: kernel launch failed: %s\n", cudaGetErrorString(err));
+                return -1;
+            }
+        }
+        {
+            const cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                fprintf(stderr, "CUDA_ERROR: PSolve_cuda: CUDA error before return: %s\n", cudaGetErrorString(err));
+                return -1;
+            }
         }
     }
 

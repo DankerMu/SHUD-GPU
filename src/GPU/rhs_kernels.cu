@@ -572,8 +572,10 @@ __global__ void k_apply_bc_and_sanitize_state(const realtype *dY, const DeviceMo
             const int i = idx - 2 * nEle;
             const int bc = (m->ele_iBC != nullptr) ? m->ele_iBC[i] : 0;
             if (bc > 0 && m->ele_yBC != nullptr) {
+                // iBC > 0 (Dirichlet): override yGW with prescribed head.
                 m->uYgw[i] = m->ele_yBC[i];
             } else {
+                // iBC <= 0 (no BC or fixed-flux/Neumann): yGW remains a state variable (dY); flux is applied in DYgw.
                 m->uYgw[i] = clamp_policy ? d_clamp_nonneg(y) : y;
             }
         } else if (idx < 3 * nEle + nRiv) {

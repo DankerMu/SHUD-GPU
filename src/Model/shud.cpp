@@ -91,11 +91,33 @@ double SHUD(FileIn *fin, FileOut *fout){
             break;
         case BACKEND_OMP:
 #ifdef _OPENMP_ON
+        {
+            /*
+             * Reproducibility note:
+             * SUNDIALS NVECTOR_OPENMP parallel reductions (dot products, norms, etc.)
+             * can introduce small run-to-run floating-point differences due to
+             * non-associative summation order. These differences can cascade through
+             * the adaptive solver and make outputs non-bitwise-reproducible.
+             *
+             * The hydrologic flux kernels below are parallelized explicitly with
+             * OpenMP (num_threads=CS.num_threads). To prioritize deterministic
+             * results, keep NVECTOR_OPENMP math reductions single-threaded.
+             */
+            const int nvec_threads = 1;
             omp_set_num_threads(nthreads);
-            screeninfo("\nBackend: omp (NVECTOR_OPENMP). Threads = %d\n", nthreads);
-            udata = N_VNew_OpenMP(NY, nthreads, sunctx);
-            du = N_VNew_OpenMP(NY, nthreads, sunctx);
+            {
+                char msg[MAXLEN];
+                snprintf(msg,
+                         sizeof(msg),
+                         "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
+                         nthreads,
+                         nvec_threads);
+                screeninfo(msg);
+            }
+            udata = N_VNew_OpenMP(NY, nvec_threads, sunctx);
+            du = N_VNew_OpenMP(NY, nvec_threads, sunctx);
             break;
+        }
 #else
             fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
             myexit(-1);

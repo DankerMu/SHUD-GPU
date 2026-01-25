@@ -221,6 +221,8 @@ public:
     unsigned long nForcingStep = 0;
     unsigned long nGpuForcingCopy = 0;
     unsigned long nGpuPrecSetup = 0;
+    std::vector<double> d2h_QeleSurf_flat;
+    std::vector<double> d2h_QeleSub_flat;
 #endif
     
 private:
@@ -299,6 +301,7 @@ public:
     void gpuUpdateForcing();
     void gpuWaitForcingCopy();
     void gpuSyncStateFromDevice(N_Vector y);
+    void gpuSyncDiagnosticsFromDevice(N_Vector y);
 #endif
     double getArea();
     void PassValue();

@@ -1220,4 +1220,196 @@ void Model_Data::gpuSyncStateFromDevice(N_Vector y)
     (void)N_VGetHostArrayPointer_Cuda(y);
 }
 
+void Model_Data::gpuSyncDiagnosticsFromDevice(N_Vector y)
+{
+    if (y == nullptr) {
+        return;
+    }
+    if (d_model == nullptr || h_model == nullptr) {
+        return;
+    }
+    if (N_VGetVectorID(y) != SUNDIALS_NVEC_CUDA) {
+        return;
+    }
+
+    cudaStream_t stream = SHUD_NVecCudaStream(y);
+    if (stream == (cudaStream_t)0) {
+        stream = cuda_stream;
+    }
+
+    bool did_copy = false;
+    auto d2h = [&](double *host, const double *dev, size_t count, const char *what) {
+        if (host == nullptr || dev == nullptr || count == 0) {
+            return;
+        }
+        const cudaError_t err =
+            cudaMemcpyAsync(host, dev, count * sizeof(double), cudaMemcpyDeviceToHost, stream);
+        cudaDie(err, what);
+        did_copy = true;
+    };
+
+    const bool need_ele_infil = (CS.dt_qe_infil > 0);
+    const bool need_ele_rech = (CS.dt_qe_rech > 0);
+    const bool need_ele_eta = (CS.dt_qe_eta > 0);
+    const bool need_ele_et = (CS.dt_qe_et > 0);
+    const bool need_ele_et_derived = need_ele_et || need_ele_eta;
+
+    const bool need_ele_Q_surfTot = (CS.dt_Qe_surf > 0);
+    const bool need_ele_Q_surfx = (CS.dt_Qe_surfx > 0);
+    const bool need_ele_Q_subTot = (CS.dt_Qe_sub > 0);
+    const bool need_ele_Q_subx = (CS.dt_Qe_subx > 0);
+    const bool need_ele_Q_rsurf = (CS.dt_Qe_rsurf > 0);
+    const bool need_ele_Q_rsub = (CS.dt_Qe_rsub > 0);
+
+    const bool need_ele_QeleSurf = need_ele_Q_surfx || need_ele_Q_surfTot;
+    const bool need_ele_QeleSub = need_ele_Q_subx || need_ele_Q_subTot;
+    const bool need_ele_Qe2r_Surf = need_ele_Q_rsurf || need_ele_Q_surfTot;
+    const bool need_ele_Qe2r_Sub = need_ele_Q_rsub || need_ele_Q_subTot;
+
+    const bool need_riv_outputs =
+        (CS.dt_Qr_up > 0) || (CS.dt_Qr_down > 0) || (CS.dt_Qr_sub > 0) || (CS.dt_Qr_surf > 0);
+    const bool need_lake_outputs = (CS.dt_lake > 0) && (NumLake > 0);
+
+    const size_t nEle = static_cast<size_t>(NumEle);
+    const size_t nRiv = static_cast<size_t>(NumRiv);
+    const size_t nLake = static_cast<size_t>(NumLake);
+
+    if (NumEle > 0) {
+        if (need_ele_infil) {
+            d2h(qEleInfil, h_model->qEleInfil, nEle, "gpuSyncDiagnosticsFromDevice(qEleInfil)");
+            d2h(qEleExfil, h_model->qEleExfil, nEle, "gpuSyncDiagnosticsFromDevice(qEleExfil)");
+        }
+        if (need_ele_rech) {
+            d2h(qEleRecharge, h_model->qEleRecharge, nEle, "gpuSyncDiagnosticsFromDevice(qEleRecharge)");
+        }
+        if (need_ele_et_derived) {
+            d2h(qEs, h_model->qEs, nEle, "gpuSyncDiagnosticsFromDevice(qEs)");
+            d2h(qEu, h_model->qEu, nEle, "gpuSyncDiagnosticsFromDevice(qEu)");
+            d2h(qEg, h_model->qEg, nEle, "gpuSyncDiagnosticsFromDevice(qEg)");
+            d2h(qTu, h_model->qTu, nEle, "gpuSyncDiagnosticsFromDevice(qTu)");
+            d2h(qTg, h_model->qTg, nEle, "gpuSyncDiagnosticsFromDevice(qTg)");
+        }
+
+        if (need_ele_Qe2r_Surf) {
+            d2h(Qe2r_Surf, h_model->Qe2r_Surf, nEle, "gpuSyncDiagnosticsFromDevice(Qe2r_Surf)");
+        }
+        if (need_ele_Qe2r_Sub) {
+            d2h(Qe2r_Sub, h_model->Qe2r_Sub, nEle, "gpuSyncDiagnosticsFromDevice(Qe2r_Sub)");
+        }
+        if (need_ele_QeleSurf) {
+            d2h_QeleSurf_flat.resize(nEle * 3u);
+            d2h(d2h_QeleSurf_flat.data(),
+                h_model->QeleSurf,
+                d2h_QeleSurf_flat.size(),
+                "gpuSyncDiagnosticsFromDevice(QeleSurf)");
+        }
+        if (need_ele_QeleSub) {
+            d2h_QeleSub_flat.resize(nEle * 3u);
+            d2h(d2h_QeleSub_flat.data(),
+                h_model->QeleSub,
+                d2h_QeleSub_flat.size(),
+                "gpuSyncDiagnosticsFromDevice(QeleSub)");
+        }
+    }
+
+    if (need_riv_outputs && NumRiv > 0) {
+        if (CS.dt_Qr_surf > 0) {
+            d2h(QrivSurf, h_model->QrivSurf, nRiv, "gpuSyncDiagnosticsFromDevice(QrivSurf)");
+        }
+        if (CS.dt_Qr_sub > 0) {
+            d2h(QrivSub, h_model->QrivSub, nRiv, "gpuSyncDiagnosticsFromDevice(QrivSub)");
+        }
+        if (CS.dt_Qr_up > 0) {
+            d2h(QrivUp, h_model->QrivUp, nRiv, "gpuSyncDiagnosticsFromDevice(QrivUp)");
+        }
+        if (CS.dt_Qr_down > 0) {
+            d2h(QrivDown, h_model->QrivDown, nRiv, "gpuSyncDiagnosticsFromDevice(QrivDown)");
+        }
+    }
+
+    if (need_lake_outputs && NumLake > 0) {
+        d2h(yLakeStg, h_model->uYlake, nLake, "gpuSyncDiagnosticsFromDevice(yLakeStg)");
+        d2h(QLakeSurf, h_model->QLakeSurf, nLake, "gpuSyncDiagnosticsFromDevice(QLakeSurf)");
+        d2h(QLakeSub, h_model->QLakeSub, nLake, "gpuSyncDiagnosticsFromDevice(QLakeSub)");
+        d2h(QLakeRivIn, h_model->QLakeRivIn, nLake, "gpuSyncDiagnosticsFromDevice(QLakeRivIn)");
+        d2h(QLakeRivOut, h_model->QLakeRivOut, nLake, "gpuSyncDiagnosticsFromDevice(QLakeRivOut)");
+        d2h(qLakePrcp, h_model->qLakePrcp, nLake, "gpuSyncDiagnosticsFromDevice(qLakePrcp)");
+        d2h(qLakeEvap, h_model->qLakeEvap, nLake, "gpuSyncDiagnosticsFromDevice(qLakeEvap)");
+        d2h(y2LakeArea, h_model->y2LakeArea, nLake, "gpuSyncDiagnosticsFromDevice(y2LakeArea)");
+    }
+
+    if (!did_copy) {
+        return;
+    }
+
+    cudaDie(cudaStreamSynchronize(stream), "gpuSyncDiagnosticsFromDevice(cudaStreamSynchronize)");
+
+    if (need_ele_QeleSurf && NumEle > 0 && QeleSurf != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            if (QeleSurf[i] == nullptr) {
+                continue;
+            }
+            const size_t base = static_cast<size_t>(i) * 3u;
+            QeleSurf[i][0] = d2h_QeleSurf_flat[base + 0];
+            QeleSurf[i][1] = d2h_QeleSurf_flat[base + 1];
+            QeleSurf[i][2] = d2h_QeleSurf_flat[base + 2];
+        }
+    }
+    if (need_ele_QeleSub && NumEle > 0 && QeleSub != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            if (QeleSub[i] == nullptr) {
+                continue;
+            }
+            const size_t base = static_cast<size_t>(i) * 3u;
+            QeleSub[i][0] = d2h_QeleSub_flat[base + 0];
+            QeleSub[i][1] = d2h_QeleSub_flat[base + 1];
+            QeleSub[i][2] = d2h_QeleSub_flat[base + 2];
+        }
+    }
+
+    if (need_ele_Q_surfTot && NumEle > 0 && QeleSurfTot != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            double total = (Qe2r_Surf != nullptr) ? Qe2r_Surf[i] : 0.0;
+            if (QeleSurf != nullptr && QeleSurf[i] != nullptr) {
+                total += QeleSurf[i][0] + QeleSurf[i][1] + QeleSurf[i][2];
+            }
+            QeleSurfTot[i] = total;
+        }
+    }
+    if (need_ele_Q_subTot && NumEle > 0 && QeleSubTot != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            double total = (Qe2r_Sub != nullptr) ? Qe2r_Sub[i] : 0.0;
+            if (QeleSub != nullptr && QeleSub[i] != nullptr) {
+                total += QeleSub[i][0] + QeleSub[i][1] + QeleSub[i][2];
+            }
+            QeleSubTot[i] = total;
+        }
+    }
+
+    if (need_ele_et_derived && NumEle > 0) {
+        for (int i = 0; i < NumEle; i++) {
+            const bool is_lake_ele = lakeon && (Ele != nullptr) && (Ele[i].iLake > 0);
+            if (is_lake_ele) {
+                if (qEleTrans != nullptr) qEleTrans[i] = 0.0;
+                if (qEleEvapo != nullptr) qEleEvapo[i] = (qPotEvap != nullptr) ? qPotEvap[i] : 0.0;
+                if (need_ele_eta && qEleETA != nullptr) {
+                    qEleETA[i] = (qEleEvapo != nullptr) ? qEleEvapo[i] : 0.0;
+                }
+                continue;
+            }
+
+            const double trans = ((qTu != nullptr) ? qTu[i] : 0.0) + ((qTg != nullptr) ? qTg[i] : 0.0);
+            const double evapo =
+                ((qEs != nullptr) ? qEs[i] : 0.0) + ((qEu != nullptr) ? qEu[i] : 0.0) + ((qEg != nullptr) ? qEg[i] : 0.0);
+            if (qEleTrans != nullptr) qEleTrans[i] = trans;
+            if (qEleEvapo != nullptr) qEleEvapo[i] = evapo;
+
+            if (need_ele_eta && qEleETA != nullptr) {
+                const double e_ic = (qEleE_IC != nullptr) ? qEleE_IC[i] : 0.0;
+                qEleETA[i] = e_ic + evapo + trans;
+            }
+        }
+    }
+}
+
 #endif /* _CUDA_ON */

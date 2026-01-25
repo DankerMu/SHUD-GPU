@@ -21,6 +21,9 @@ void Model_Data::Flux_RiverDown(double t, int i){
             CSarea = Riv[i].u_CSarea;
             R = (Perem <= 0.) ? 0. : (CSarea / Perem);
             QrivDown[i] = ManningEquation(CSarea, n, R, s);
+#ifdef _OPENMP_ON
+#pragma omp atomic
+#endif
             QLakeRivIn[Riv[i].toLake] += QrivDown[i];  /* Positive = river to Lake */
     }else if (iDown >= 0) {
         sMean = (Riv[i].BedSlope + Riv[iDown].BedSlope) * 0.5 ;

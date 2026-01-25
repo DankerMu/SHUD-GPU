@@ -299,6 +299,7 @@ public:
     void gpuUpdateForcing();
     void gpuWaitForcingCopy();
     void gpuSyncStateFromDevice(N_Vector y);
+    void gpuSyncDiagnosticsFromDevice();
 #endif
     double getArea();
     void PassValue();

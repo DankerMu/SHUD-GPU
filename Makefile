@@ -64,7 +64,12 @@ MAIN_DEBUG 		= ${SRC_DIR}/main.cpp
 
 CC       = /usr/bin/g++
 MPICC    = /usr/local/bin/mpic++
+NVCC_DEFAULT := $(CUDA_HOME)/bin/nvcc
+ifneq ($(wildcard $(NVCC_DEFAULT)),)
+NVCC     ?= $(NVCC_DEFAULT)
+else
 NVCC     ?= nvcc
+endif
 CFLAGS   = -O3 -g  -std=c++14
 #STCFLAG     = -static
 

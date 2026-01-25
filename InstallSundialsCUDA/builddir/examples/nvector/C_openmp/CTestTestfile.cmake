@@ -1,0 +1,18 @@
+# CMake generated Testfile for 
+# Source directory: /mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp
+# Build directory: /mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp
+# 
+# This file includes the relevant testing commands required for 
+# testing this directory and lists subdirectories to be tested as well.
+add_test(test_nvector_openmp_1000_1_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "1000" "1" "0")
+set_tests_properties(test_nvector_openmp_1000_1_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")
+add_test(test_nvector_openmp_1000_2_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "1000" "2" "0")
+set_tests_properties(test_nvector_openmp_1000_2_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")
+add_test(test_nvector_openmp_1000_4_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "1000" "4" "0")
+set_tests_properties(test_nvector_openmp_1000_4_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")
+add_test(test_nvector_openmp_10000_1_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "10000" "1" "0")
+set_tests_properties(test_nvector_openmp_10000_1_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")
+add_test(test_nvector_openmp_10000_2_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "10000" "2" "0")
+set_tests_properties(test_nvector_openmp_10000_2_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")
+add_test(test_nvector_openmp_10000_4_0 "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/examples/nvector/C_openmp/test_nvector_openmp" "10000" "4" "0")
+set_tests_properties(test_nvector_openmp_10000_4_0 PROPERTIES  _BACKTRACE_TRIPLES "/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/cmake/macros/SundialsAddTest.cmake;161;add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;83;sundials_add_test;/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/src/cvode-6.0.0/examples/nvector/C_openmp/CMakeLists.txt;0;")

@@ -534,6 +534,9 @@ void Print_Ctrl::Init(long st, int n, const char *s, int dt, double *x, int iFlu
         fprintf(stderr, "WARNING: Empty columns in %s.\n;", filename);
     }
     buffer = new double[NumVar];
+    for (int i = 0; i < NumVar; i++) {
+        buffer[i] = 0.0;
+    }
     PrintVar = new double*[NumVar];
     icol    = new double[NumVar];
     int k = 0;
@@ -553,10 +556,6 @@ void Print_Ctrl::Init(long st, int n, const char *s, int dt, double *x, int iFlu
 
 void Print_Ctrl::InitIJ(long st, int n, const char *s, int dt, double **x, int j, int iFlux, int *flag_IO){
     StartTime = st;
-    NumVar = n;
-    PrintVar = new double*[NumVar];
-    buffer = new double[NumVar];
-    icol    = new double[NumVar];
     strcpy(filename, s);
     if(dt == 0 ){
         myexit(ERRCONSIS);
@@ -572,7 +571,11 @@ void Print_Ctrl::InitIJ(long st, int n, const char *s, int dt, double **x, int j
         fprintf(stderr, "WARNING: Empty columns in %s.\n;", filename);
     }
     buffer = new double[NumVar];
+    for (int i = 0; i < NumVar; i++) {
+        buffer[i] = 0.0;
+    }
     PrintVar = new double*[NumVar];
+    icol    = new double[NumVar];
     int k = 0;
     for(int i = 0; i < n; i++){
         if(flag_IO[i]){ /* IO is TRUE*/

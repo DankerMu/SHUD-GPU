@@ -1,0 +1,114 @@
+# -----------------------------------------------------------------
+# Programmer(s): Radu Serban @ LLNL
+#                David J. Gardner @ LLNL
+# -----------------------------------------------------------------
+# SUNDIALS Copyright Start
+# Copyright (c) 2002-2021, Lawrence Livermore National Security
+# and Southern Methodist University.
+# All rights reserved.
+#
+# See the top-level LICENSE and NOTICE files for details.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# SUNDIALS Copyright End
+# -----------------------------------------------------------------
+# CMakeLists.txt for  C OpenMP examples.
+#
+# This file is generated from a template using variables
+# set at configuration time. It can be used as a template for
+# other user CMakeLists configuration files.
+# -----------------------------------------------------------------
+
+# Set the minimum required cmake version
+cmake_minimum_required(VERSION 3.22.1)
+
+# Set cache variables for compilers and flags
+set(CMAKE_C_COMPILER
+  /usr/bin/cc
+  CACHE FILEPATH "C compiler")
+
+set(CMAKE_C_FLAGS
+  " -D_POSIX_C_SOURCE=199309L"
+  CACHE STRING "C compiler flags")
+
+if("")
+  set(CMAKE_C_STANDARD ""
+    CACHE STRING "C standard")
+endif()
+
+# Specify project name and languages
+project(_C_openmp_examples C)
+
+# Enable testing
+include(CTest)
+
+# ------------------------------------------------------------------------------
+
+# find OpenMP
+find_package(OpenMP REQUIRED)
+
+# Update C compiler and linker flags
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_C_FLAGS}")
+
+# ------------------------------------------------------------------------------
+
+# Specify the path to SUNDIALS header files
+set(SUNDIALS_INCLUDE_DIR
+  /root/sundials/include
+  CACHE PATH "Location of SUNDIALS header files")
+
+# Specify the path to SUNDIALS libraries
+set(SUNDIALS_LIBRARY_DIR
+  /root/sundials/lib
+  CACHE PATH "Location of SUNDIALS libraries")
+
+# Find the SUNDIALS libraries
+find_library(SUNDIALS_SOLVER_LIB
+  sundials_nvecopenmp ${SUNDIALS_LIBRARY_DIR}
+  DOC " library")
+
+find_library(SUNDIALS_NVEC_LIB
+  sundials_nvecopenmp ${SUNDIALS_LIBRARY_DIR}
+  DOC "NVECTOR_OPENMP library")
+
+# Set additional libraries
+set(SUNDIALS_EXTRA_LIBS  -lm CACHE STRING "Additional libraries")
+
+# For SUNDIALS module examples the solver library is not needed
+if(NOT SUNDIALS_SOLVER_LIB)
+  set(SUNDIALS_SOLVER_LIB "")
+endif()
+
+# List of SUNDIALS libraries
+set(SUNDIALS_LIBRARIES
+  -L${SUNDIALS_LIBRARY_DIR}
+  ${SUNDIALS_SOLVER_LIB}
+  ${SUNDIALS_NVEC_LIB}
+  ${SUNDIALS_EXTRA_LIBS})
+
+# ------------------------------------------------------------------------------
+
+# Set the names of the examples to be built and their dependencies
+set(examples  test_nvector_openmp)
+set(examples_dependencies  test_nvector sundials_nvector)
+if(examples)
+  list(REMOVE_DUPLICATES examples)
+endif()
+
+# Create targets for each example
+foreach(example ${examples})
+
+  # example source files
+  add_executable(${example} ${example}.c ${examples_dependencies})
+
+  # directories to include
+  target_include_directories(${example} PRIVATE ${SUNDIALS_INCLUDE_DIR})
+
+  # libraries to link against
+  target_link_libraries(${example} ${SUNDIALS_LIBRARIES})
+
+  # add the example to ctest
+  add_test(NAME ${example} COMMAND ${example})
+
+endforeach()

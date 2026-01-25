@@ -212,9 +212,7 @@ double SHUD(FileIn *fin, FileOut *fout){
         //            CVODEstatus(mem, udata, t);
 #ifdef _CUDA_ON
         MD->gpuSyncStateFromDevice(udata);
-        if (N_VGetVectorID(udata) == SUNDIALS_NVEC_CUDA) {
-            MD->gpuSyncDiagnosticsFromDevice();
-        }
+        MD->gpuSyncDiagnosticsFromDevice(udata);
 #endif
         MD->summary(udata);
         MD->CS.ExportResults(t);

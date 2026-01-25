@@ -1,0 +1,14 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/mnt/sdc/SHUD-GPU/InstallSundialsCUDA/builddir/POSIX_TIMER_TEST/ltest.c
+time.h
+-
+unistd.h
+-
+

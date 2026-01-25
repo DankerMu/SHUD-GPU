@@ -54,6 +54,39 @@ void cudaFreeIfNotNull(void *p)
     (void)cudaFree(p);
 }
 
+void tryHostRegister(Model_Data *md, void *ptr, size_t bytes, const char *what)
+{
+    if (md == nullptr || ptr == nullptr || bytes == 0) {
+        return;
+    }
+    const cudaError_t err = cudaHostRegister(ptr, bytes, cudaHostRegisterDefault);
+    if (err == cudaSuccess) {
+        md->pinned_host_buffers.push_back(ptr);
+        return;
+    }
+    if (err == cudaErrorHostMemoryAlreadyRegistered) {
+        return;
+    }
+    fprintf(stderr, "gpuInit: failed to pin host buffer for %s: %s (continuing)\n", what, cudaGetErrorString(err));
+}
+
+void unregisterPinnedHostBuffers(Model_Data *md)
+{
+    if (md == nullptr) {
+        return;
+    }
+    for (void *ptr : md->pinned_host_buffers) {
+        if (ptr == nullptr) {
+            continue;
+        }
+        const cudaError_t err = cudaHostUnregister(ptr);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuFree: failed to unpin host buffer: %s (continuing)\n", cudaGetErrorString(err));
+        }
+    }
+    md->pinned_host_buffers.clear();
+}
+
 void freeDeviceBuffers(DeviceModel &h)
 {
     cudaFreeIfNotNull(h.ele_area);
@@ -153,9 +186,14 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.qEg);
     cudaFreeIfNotNull(h.qTu);
     cudaFreeIfNotNull(h.qTg);
+    cudaFreeIfNotNull(h.qEleTrans);
+    cudaFreeIfNotNull(h.qEleEvapo);
+    cudaFreeIfNotNull(h.qEleETA);
 
     cudaFreeIfNotNull(h.QeleSurf);
     cudaFreeIfNotNull(h.QeleSub);
+    cudaFreeIfNotNull(h.QeleSurfTot);
+    cudaFreeIfNotNull(h.QeleSubTot);
 
     cudaFreeIfNotNull(h.QrivSurf);
     cudaFreeIfNotNull(h.QrivSub);
@@ -884,6 +922,48 @@ void gpuInit(Model_Data *md)
         goto fail;
     }
 
+    /* Derived element diagnostics for host-side output (computed on demand). */
+    {
+        const bool need_ele_et = (md->CS.dt_qe_et > 0);
+        const bool need_ele_eta = (md->CS.dt_qe_eta > 0);
+        const bool need_ele_Q_surfTot = (md->CS.dt_Qe_surf > 0);
+        const bool need_ele_Q_subTot = (md->CS.dt_Qe_sub > 0);
+
+        if (need_ele_et) {
+            err = cudaAllocAndUpload(&h.qEleTrans, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
+            if (err != cudaSuccess) {
+                fprintf(stderr, "gpuInit: failed to allocate qEleTrans\n");
+                goto fail;
+            }
+            err = cudaAllocAndUpload(&h.qEleEvapo, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
+            if (err != cudaSuccess) {
+                fprintf(stderr, "gpuInit: failed to allocate qEleEvapo\n");
+                goto fail;
+            }
+        }
+        if (need_ele_eta) {
+            err = cudaAllocAndUpload(&h.qEleETA, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
+            if (err != cudaSuccess) {
+                fprintf(stderr, "gpuInit: failed to allocate qEleETA\n");
+                goto fail;
+            }
+        }
+        if (need_ele_Q_surfTot) {
+            err = cudaAllocAndUpload(&h.QeleSurfTot, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
+            if (err != cudaSuccess) {
+                fprintf(stderr, "gpuInit: failed to allocate QeleSurfTot\n");
+                goto fail;
+            }
+        }
+        if (need_ele_Q_subTot) {
+            err = cudaAllocAndUpload(&h.QeleSubTot, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumEle));
+            if (err != cudaSuccess) {
+                fprintf(stderr, "gpuInit: failed to allocate QeleSubTot\n");
+                goto fail;
+            }
+        }
+    }
+
     if (h.NumRiv > 0) {
         err = cudaAllocAndUpload(&h.QrivSurf, md->QrivSurf, static_cast<size_t>(h.NumRiv));
         if (err != cudaSuccess) {
@@ -1040,6 +1120,76 @@ void gpuInit(Model_Data *md)
     }
     delete md->h_model;
     md->h_model = new DeviceModel(h);
+
+    /* Pin host output buffers for truly async D2H copies during ExportResults. */
+    md->pinned_host_buffers.clear();
+    {
+        const size_t nEle = static_cast<size_t>(h.NumEle);
+        const size_t nRiv = static_cast<size_t>(h.NumRiv);
+        const size_t nLake = static_cast<size_t>(h.NumLake);
+
+        if (md->CS.dt_qe_infil > 0) {
+            tryHostRegister(md, md->qEleInfil, nEle * sizeof(double), "qEleInfil");
+            tryHostRegister(md, md->qEleExfil, nEle * sizeof(double), "qEleExfil");
+        }
+        if (md->CS.dt_qe_rech > 0) {
+            tryHostRegister(md, md->qEleRecharge, nEle * sizeof(double), "qEleRecharge");
+        }
+        if (md->CS.dt_qe_et > 0) {
+            tryHostRegister(md, md->qEleTrans, nEle * sizeof(double), "qEleTrans");
+            tryHostRegister(md, md->qEleEvapo, nEle * sizeof(double), "qEleEvapo");
+        }
+        if (md->CS.dt_qe_eta > 0) {
+            tryHostRegister(md, md->qEleETA, nEle * sizeof(double), "qEleETA");
+        }
+
+        if (md->CS.dt_Qe_surf > 0) {
+            tryHostRegister(md, md->QeleSurfTot, nEle * sizeof(double), "QeleSurfTot");
+        }
+        if (md->CS.dt_Qe_sub > 0) {
+            tryHostRegister(md, md->QeleSubTot, nEle * sizeof(double), "QeleSubTot");
+        }
+        if (md->CS.dt_Qe_rsurf > 0) {
+            tryHostRegister(md, md->Qe2r_Surf, nEle * sizeof(double), "Qe2r_Surf");
+        }
+        if (md->CS.dt_Qe_rsub > 0) {
+            tryHostRegister(md, md->Qe2r_Sub, nEle * sizeof(double), "Qe2r_Sub");
+        }
+
+        if (md->CS.dt_Qe_surfx > 0 && h.NumEle > 0) {
+            md->d2h_QeleSurf_flat.resize(nEle * 3u);
+            tryHostRegister(md,
+                            md->d2h_QeleSurf_flat.data(),
+                            md->d2h_QeleSurf_flat.size() * sizeof(double),
+                            "d2h_QeleSurf_flat");
+        }
+        if (md->CS.dt_Qe_subx > 0 && h.NumEle > 0) {
+            md->d2h_QeleSub_flat.resize(nEle * 3u);
+            tryHostRegister(md,
+                            md->d2h_QeleSub_flat.data(),
+                            md->d2h_QeleSub_flat.size() * sizeof(double),
+                            "d2h_QeleSub_flat");
+        }
+
+        if (h.NumRiv > 0) {
+            if (md->CS.dt_Qr_surf > 0) tryHostRegister(md, md->QrivSurf, nRiv * sizeof(double), "QrivSurf");
+            if (md->CS.dt_Qr_sub > 0) tryHostRegister(md, md->QrivSub, nRiv * sizeof(double), "QrivSub");
+            if (md->CS.dt_Qr_up > 0) tryHostRegister(md, md->QrivUp, nRiv * sizeof(double), "QrivUp");
+            if (md->CS.dt_Qr_down > 0) tryHostRegister(md, md->QrivDown, nRiv * sizeof(double), "QrivDown");
+        }
+
+        if (md->CS.dt_lake > 0 && h.NumLake > 0) {
+            tryHostRegister(md, md->yLakeStg, nLake * sizeof(double), "yLakeStg");
+            tryHostRegister(md, md->QLakeSurf, nLake * sizeof(double), "QLakeSurf");
+            tryHostRegister(md, md->QLakeSub, nLake * sizeof(double), "QLakeSub");
+            tryHostRegister(md, md->QLakeRivIn, nLake * sizeof(double), "QLakeRivIn");
+            tryHostRegister(md, md->QLakeRivOut, nLake * sizeof(double), "QLakeRivOut");
+            tryHostRegister(md, md->qLakePrcp, nLake * sizeof(double), "qLakePrcp");
+            tryHostRegister(md, md->qLakeEvap, nLake * sizeof(double), "qLakeEvap");
+            tryHostRegister(md, md->y2LakeArea, nLake * sizeof(double), "y2LakeArea");
+        }
+    }
+
     return;
 
 fail:
@@ -1077,6 +1227,9 @@ void gpuFree(Model_Data *md)
     if (md->cuda_stream != nullptr) {
         (void)cudaStreamSynchronize(md->cuda_stream);
     }
+
+    unregisterPinnedHostBuffers(md);
+
     if (md->forcing_copy_event != nullptr) {
         (void)cudaEventDestroy(md->forcing_copy_event);
         md->forcing_copy_event = nullptr;
@@ -1220,104 +1373,214 @@ void Model_Data::gpuSyncStateFromDevice(N_Vector y)
     (void)N_VGetHostArrayPointer_Cuda(y);
 }
 
-void Model_Data::gpuSyncDiagnosticsFromDevice()
+namespace {
+
+inline int cap_blocks(int blocks) { return (blocks > 65535) ? 65535 : blocks; }
+
+__global__ void k_derive_element_diagnostics(const DeviceModel *m)
 {
+    if (m == nullptr || m->NumEle <= 0) {
+        return;
+    }
+
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m->NumEle; i += blockDim.x * gridDim.x) {
+        const int iLake = (m->NumLake > 0 && m->ele_iLake != nullptr) ? m->ele_iLake[i] : 0;
+        const bool is_lake_ele = (iLake > 0);
+
+        if (m->QeleSurfTot != nullptr) {
+            double total = (m->Qe2r_Surf != nullptr) ? m->Qe2r_Surf[i] : 0.0;
+            if (m->QeleSurf != nullptr) {
+                const int base = i * 3;
+                total += m->QeleSurf[base + 0] + m->QeleSurf[base + 1] + m->QeleSurf[base + 2];
+            }
+            m->QeleSurfTot[i] = total;
+        }
+
+        if (m->QeleSubTot != nullptr) {
+            double total = (m->Qe2r_Sub != nullptr) ? m->Qe2r_Sub[i] : 0.0;
+            if (m->QeleSub != nullptr) {
+                const int base = i * 3;
+                total += m->QeleSub[base + 0] + m->QeleSub[base + 1] + m->QeleSub[base + 2];
+            }
+            m->QeleSubTot[i] = total;
+        }
+
+        const double trans =
+            is_lake_ele ? 0.0 : ((m->qTu != nullptr) ? m->qTu[i] : 0.0) + ((m->qTg != nullptr) ? m->qTg[i] : 0.0);
+        const double evapo =
+            is_lake_ele ? ((m->qPotEvap != nullptr) ? m->qPotEvap[i] : 0.0)
+                        : ((m->qEs != nullptr) ? m->qEs[i] : 0.0) + ((m->qEu != nullptr) ? m->qEu[i] : 0.0) +
+                              ((m->qEg != nullptr) ? m->qEg[i] : 0.0);
+
+        if (m->qEleTrans != nullptr) {
+            m->qEleTrans[i] = trans;
+        }
+        if (m->qEleEvapo != nullptr) {
+            m->qEleEvapo[i] = evapo;
+        }
+        if (m->qEleETA != nullptr) {
+            const double e_ic = (is_lake_ele || m->qEleE_IC == nullptr) ? 0.0 : m->qEleE_IC[i];
+            m->qEleETA[i] = e_ic + evapo + trans;
+        }
+    }
+}
+
+} // namespace
+
+void Model_Data::gpuSyncDiagnosticsFromDevice(N_Vector y)
+{
+    if (y == nullptr) {
+        return;
+    }
     if (d_model == nullptr || h_model == nullptr) {
         return;
     }
-    if (cuda_stream == nullptr) {
-        fprintf(stderr, "gpuSyncDiagnosticsFromDevice: cuda_stream is not initialized\n");
-        std::abort();
-    }
-
-    cudaStream_t stream = cuda_stream;
-
-    auto queueD2H = [&](void *dst, const void *src, size_t bytes, const char *what) {
-        if (bytes == 0) {
-            return;
-        }
-        if (dst == nullptr || src == nullptr) {
-            return;
-        }
-        const cudaError_t err = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToHost, stream);
-        cudaDie(err, what);
-    };
-
-    std::vector<double> h_QeleSurf_flat;
-    std::vector<double> h_QeleSub_flat;
-
-    if (NumEle > 0) {
-        const size_t bytes_ele = static_cast<size_t>(NumEle) * sizeof(double);
-        queueD2H(qEleInfil, h_model->qEleInfil, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleInfil)");
-        queueD2H(qEleExfil, h_model->qEleExfil, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleExfil)");
-        queueD2H(qEleRecharge, h_model->qEleRecharge, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleRecharge)");
-
-        queueD2H(qEs, h_model->qEs, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEs)");
-        queueD2H(qEu, h_model->qEu, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEu)");
-        queueD2H(qEg, h_model->qEg, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEg)");
-        queueD2H(qTu, h_model->qTu, bytes_ele, "gpuSyncDiagnosticsFromDevice(qTu)");
-        queueD2H(qTg, h_model->qTg, bytes_ele, "gpuSyncDiagnosticsFromDevice(qTg)");
-
-        queueD2H(Qe2r_Surf, h_model->Qe2r_Surf, bytes_ele, "gpuSyncDiagnosticsFromDevice(Qe2r_Surf)");
-        queueD2H(Qe2r_Sub, h_model->Qe2r_Sub, bytes_ele, "gpuSyncDiagnosticsFromDevice(Qe2r_Sub)");
-
-        const size_t n_edge = static_cast<size_t>(NumEle) * 3;
-        const size_t bytes_edge = n_edge * sizeof(double);
-        h_QeleSurf_flat.resize(n_edge);
-        h_QeleSub_flat.resize(n_edge);
-        queueD2H(h_QeleSurf_flat.data(), h_model->QeleSurf, bytes_edge, "gpuSyncDiagnosticsFromDevice(QeleSurf)");
-        queueD2H(h_QeleSub_flat.data(), h_model->QeleSub, bytes_edge, "gpuSyncDiagnosticsFromDevice(QeleSub)");
-    }
-
-    if (NumRiv > 0) {
-        const size_t bytes_riv = static_cast<size_t>(NumRiv) * sizeof(double);
-        queueD2H(QrivSurf, h_model->QrivSurf, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivSurf)");
-        queueD2H(QrivSub, h_model->QrivSub, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivSub)");
-        queueD2H(QrivDown, h_model->QrivDown, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivDown)");
-        queueD2H(QrivUp, h_model->QrivUp, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivUp)");
-    }
-
-    if (NumLake > 0) {
-        const size_t bytes_lake = static_cast<size_t>(NumLake) * sizeof(double);
-        queueD2H(QLakeSurf, h_model->QLakeSurf, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeSurf)");
-        queueD2H(QLakeSub, h_model->QLakeSub, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeSub)");
-        queueD2H(QLakeRivIn, h_model->QLakeRivIn, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeRivIn)");
-        queueD2H(QLakeRivOut, h_model->QLakeRivOut, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeRivOut)");
-        queueD2H(qLakePrcp, h_model->qLakePrcp, bytes_lake, "gpuSyncDiagnosticsFromDevice(qLakePrcp)");
-        queueD2H(qLakeEvap, h_model->qLakeEvap, bytes_lake, "gpuSyncDiagnosticsFromDevice(qLakeEvap)");
-        queueD2H(y2LakeArea, h_model->y2LakeArea, bytes_lake, "gpuSyncDiagnosticsFromDevice(y2LakeArea)");
-    }
-
-    {
-        const cudaError_t err = cudaStreamSynchronize(stream);
-        cudaDie(err, "gpuSyncDiagnosticsFromDevice(cudaStreamSynchronize)");
-    }
-
-    if (NumEle <= 0) {
+    if (N_VGetVectorID(y) != SUNDIALS_NVEC_CUDA) {
         return;
     }
 
-    for (int i = 0; i < NumEle; i++) {
-        const size_t off = static_cast<size_t>(i) * 3;
+    cudaStream_t stream = SHUD_NVecCudaStream(y);
 
-        if (QeleSurf != nullptr && QeleSurf[i] != nullptr && off + 2 < h_QeleSurf_flat.size()) {
-            QeleSurf[i][0] = h_QeleSurf_flat[off + 0];
-            QeleSurf[i][1] = h_QeleSurf_flat[off + 1];
-            QeleSurf[i][2] = h_QeleSurf_flat[off + 2];
+    bool did_copy = false;
+    auto d2h = [&](double *host, const double *dev, size_t count, const char *what) {
+        if (host == nullptr || dev == nullptr || count == 0) {
+            return;
         }
-        if (QeleSub != nullptr && QeleSub[i] != nullptr && off + 2 < h_QeleSub_flat.size()) {
-            QeleSub[i][0] = h_QeleSub_flat[off + 0];
-            QeleSub[i][1] = h_QeleSub_flat[off + 1];
-            QeleSub[i][2] = h_QeleSub_flat[off + 2];
+        const cudaError_t err =
+            cudaMemcpyAsync(host, dev, count * sizeof(double), cudaMemcpyDeviceToHost, stream);
+        cudaDie(err, what);
+        did_copy = true;
+    };
+
+    const bool need_ele_infil = (CS.dt_qe_infil > 0);
+    const bool need_ele_rech = (CS.dt_qe_rech > 0);
+    const bool need_ele_eta = (CS.dt_qe_eta > 0);
+    const bool need_ele_et = (CS.dt_qe_et > 0);
+
+    const bool need_ele_Q_surfTot = (CS.dt_Qe_surf > 0);
+    const bool need_ele_Q_surfx = (CS.dt_Qe_surfx > 0);
+    const bool need_ele_Q_subTot = (CS.dt_Qe_sub > 0);
+    const bool need_ele_Q_subx = (CS.dt_Qe_subx > 0);
+    const bool need_ele_Q_rsurf = (CS.dt_Qe_rsurf > 0);
+    const bool need_ele_Q_rsub = (CS.dt_Qe_rsub > 0);
+
+    const bool need_ele_QeleSurf = need_ele_Q_surfx;
+    const bool need_ele_QeleSub = need_ele_Q_subx;
+    const bool need_ele_Qe2r_Surf = need_ele_Q_rsurf;
+    const bool need_ele_Qe2r_Sub = need_ele_Q_rsub;
+
+    const bool need_riv_outputs =
+        (CS.dt_Qr_up > 0) || (CS.dt_Qr_down > 0) || (CS.dt_Qr_sub > 0) || (CS.dt_Qr_surf > 0);
+    const bool need_lake_outputs = (CS.dt_lake > 0) && (NumLake > 0);
+
+    const size_t nEle = static_cast<size_t>(NumEle);
+    const size_t nRiv = static_cast<size_t>(NumRiv);
+    const size_t nLake = static_cast<size_t>(NumLake);
+
+    if (NumEle > 0) {
+        const bool need_ele_derived = need_ele_Q_surfTot || need_ele_Q_subTot || need_ele_et || need_ele_eta;
+        if (need_ele_derived) {
+            constexpr int kBlockSize = 256;
+            const int blocks = cap_blocks((NumEle + kBlockSize - 1) / kBlockSize);
+            k_derive_element_diagnostics<<<blocks, kBlockSize, 0, stream>>>(d_model);
+            cudaDie(cudaPeekAtLastError(), "gpuSyncDiagnosticsFromDevice(k_derive_element_diagnostics launch)");
         }
 
-        if (QeleSurfTot != nullptr && QeleSurf != nullptr && QeleSurf[i] != nullptr) {
-            const double Qe2r = (Qe2r_Surf != nullptr) ? Qe2r_Surf[i] : 0.0;
-            QeleSurfTot[i] = Qe2r + QeleSurf[i][0] + QeleSurf[i][1] + QeleSurf[i][2];
+        if (need_ele_infil) {
+            d2h(qEleInfil, h_model->qEleInfil, nEle, "gpuSyncDiagnosticsFromDevice(qEleInfil)");
+            d2h(qEleExfil, h_model->qEleExfil, nEle, "gpuSyncDiagnosticsFromDevice(qEleExfil)");
         }
-        if (QeleSubTot != nullptr && QeleSub != nullptr && QeleSub[i] != nullptr) {
-            const double Qe2r = (Qe2r_Sub != nullptr) ? Qe2r_Sub[i] : 0.0;
-            QeleSubTot[i] = Qe2r + QeleSub[i][0] + QeleSub[i][1] + QeleSub[i][2];
+        if (need_ele_rech) {
+            d2h(qEleRecharge, h_model->qEleRecharge, nEle, "gpuSyncDiagnosticsFromDevice(qEleRecharge)");
+        }
+        if (need_ele_et) {
+            d2h(qEleTrans, h_model->qEleTrans, nEle, "gpuSyncDiagnosticsFromDevice(qEleTrans)");
+            d2h(qEleEvapo, h_model->qEleEvapo, nEle, "gpuSyncDiagnosticsFromDevice(qEleEvapo)");
+        }
+        if (need_ele_eta) {
+            d2h(qEleETA, h_model->qEleETA, nEle, "gpuSyncDiagnosticsFromDevice(qEleETA)");
+        }
+        if (need_ele_Q_surfTot) {
+            d2h(QeleSurfTot, h_model->QeleSurfTot, nEle, "gpuSyncDiagnosticsFromDevice(QeleSurfTot)");
+        }
+        if (need_ele_Q_subTot) {
+            d2h(QeleSubTot, h_model->QeleSubTot, nEle, "gpuSyncDiagnosticsFromDevice(QeleSubTot)");
+        }
+
+        if (need_ele_Qe2r_Surf) {
+            d2h(Qe2r_Surf, h_model->Qe2r_Surf, nEle, "gpuSyncDiagnosticsFromDevice(Qe2r_Surf)");
+        }
+        if (need_ele_Qe2r_Sub) {
+            d2h(Qe2r_Sub, h_model->Qe2r_Sub, nEle, "gpuSyncDiagnosticsFromDevice(Qe2r_Sub)");
+        }
+        if (need_ele_QeleSurf) {
+            d2h_QeleSurf_flat.resize(nEle * 3u);
+            d2h(d2h_QeleSurf_flat.data(),
+                h_model->QeleSurf,
+                d2h_QeleSurf_flat.size(),
+                "gpuSyncDiagnosticsFromDevice(QeleSurf)");
+        }
+        if (need_ele_QeleSub) {
+            d2h_QeleSub_flat.resize(nEle * 3u);
+            d2h(d2h_QeleSub_flat.data(),
+                h_model->QeleSub,
+                d2h_QeleSub_flat.size(),
+                "gpuSyncDiagnosticsFromDevice(QeleSub)");
+        }
+    }
+
+    if (need_riv_outputs && NumRiv > 0) {
+        if (CS.dt_Qr_surf > 0) {
+            d2h(QrivSurf, h_model->QrivSurf, nRiv, "gpuSyncDiagnosticsFromDevice(QrivSurf)");
+        }
+        if (CS.dt_Qr_sub > 0) {
+            d2h(QrivSub, h_model->QrivSub, nRiv, "gpuSyncDiagnosticsFromDevice(QrivSub)");
+        }
+        if (CS.dt_Qr_up > 0) {
+            d2h(QrivUp, h_model->QrivUp, nRiv, "gpuSyncDiagnosticsFromDevice(QrivUp)");
+        }
+        if (CS.dt_Qr_down > 0) {
+            d2h(QrivDown, h_model->QrivDown, nRiv, "gpuSyncDiagnosticsFromDevice(QrivDown)");
+        }
+    }
+
+    if (need_lake_outputs) {
+        d2h(yLakeStg, h_model->uYlake, nLake, "gpuSyncDiagnosticsFromDevice(yLakeStg)");
+        d2h(QLakeSurf, h_model->QLakeSurf, nLake, "gpuSyncDiagnosticsFromDevice(QLakeSurf)");
+        d2h(QLakeSub, h_model->QLakeSub, nLake, "gpuSyncDiagnosticsFromDevice(QLakeSub)");
+        d2h(QLakeRivIn, h_model->QLakeRivIn, nLake, "gpuSyncDiagnosticsFromDevice(QLakeRivIn)");
+        d2h(QLakeRivOut, h_model->QLakeRivOut, nLake, "gpuSyncDiagnosticsFromDevice(QLakeRivOut)");
+        d2h(qLakePrcp, h_model->qLakePrcp, nLake, "gpuSyncDiagnosticsFromDevice(qLakePrcp)");
+        d2h(qLakeEvap, h_model->qLakeEvap, nLake, "gpuSyncDiagnosticsFromDevice(qLakeEvap)");
+        d2h(y2LakeArea, h_model->y2LakeArea, nLake, "gpuSyncDiagnosticsFromDevice(y2LakeArea)");
+    }
+
+    if (!did_copy) {
+        return;
+    }
+
+    cudaDie(cudaStreamSynchronize(stream), "gpuSyncDiagnosticsFromDevice(cudaStreamSynchronize)");
+
+    if (need_ele_QeleSurf && NumEle > 0 && QeleSurf != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            if (QeleSurf[i] == nullptr) {
+                continue;
+            }
+            const size_t base = static_cast<size_t>(i) * 3u;
+            QeleSurf[i][0] = d2h_QeleSurf_flat[base + 0];
+            QeleSurf[i][1] = d2h_QeleSurf_flat[base + 1];
+            QeleSurf[i][2] = d2h_QeleSurf_flat[base + 2];
+        }
+    }
+    if (need_ele_QeleSub && NumEle > 0 && QeleSub != nullptr) {
+        for (int i = 0; i < NumEle; i++) {
+            if (QeleSub[i] == nullptr) {
+                continue;
+            }
+            const size_t base = static_cast<size_t>(i) * 3u;
+            QeleSub[i][0] = d2h_QeleSub_flat[base + 0];
+            QeleSub[i][1] = d2h_QeleSub_flat[base + 1];
+            QeleSub[i][2] = d2h_QeleSub_flat[base + 2];
         }
     }
 }

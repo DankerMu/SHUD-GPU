@@ -49,6 +49,9 @@ void Model_Data::fun_Ele_surface(int i, double t){
             Q = WeirFlow_jtoi(lake[ilake].zmin, nsf,
                               Ele[i].z_surf, isf,
                               Ele[i].z_surf, 0.6, B, 0.01); /* func WeirFlow_jtoi is */
+#ifdef _OPENMP_ON
+#pragma omp atomic
+#endif
             QLakeSurf[ilake] += Q;  /* Positive of QLakeSurf = Element to Lake */
 //            CheckNANi( QLakeSurf[ilake] , i, "QLakeSurf[ilake] in Model_Data::fun_Ele_surface");
         }else if (inabr >= 0) {
@@ -118,6 +121,9 @@ void Model_Data::fun_Ele_sub(int i, double t){
                 Q = Kmean * grad * Ymean * Ele[i].edge[j];
 //                CheckNANi(Q, i, "Q in Model_Data::fun_Ele_sub");
             }
+#ifdef _OPENMP_ON
+#pragma omp atomic
+#endif
             QLakeSub[ilake] += Q; /* Positive of QLakeSub = Element to Lake */
         }else if (inabr >= 0) {
             /***************************************************************************/

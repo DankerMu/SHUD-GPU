@@ -44,6 +44,12 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
             /* Convert with specific yield */
             DY[iUS] /= Ele[i].Sy;
             DY[iGW] /= Ele[i].Sy;
+
+            if(Ele[i].iLake > 0){
+                DY[i] = 0.;
+                DY[ius] = 0.;
+                DY[igw] = 0.;
+            }
 #ifdef DEBUG
             CheckNANi(DY[i], i, "DY[i] (Model_Data::f_applyDY)");
             CheckNANi(DY[iUS], i, "DY[iUS] (Model_Data::f_applyDY)");
@@ -63,6 +69,15 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
             CheckNANi(DY[i + 3 * NumEle], i, "DY[i] of river (Model_Data::f_applyDY)");
 #endif
         } // end of for 1:NumRiv
+
+#pragma omp for
+        for (i = 0; i < NumLake; i++) {
+            DY[iLAKE] = qLakePrcp[i] - qLakeEvap[i]  +
+                        (QLakeRivIn[i] - QLakeRivOut[i] + QLakeSub[i] + QLakeSurf[i] ) / y2LakeArea[i] ;
+#ifdef DEBUG
+            CheckNANi(DY[iLAKE], i, "DY[i] of LAKE (Model_Data::f_applyDY)");
+#endif
+        }
     } // end of parallel
 }
 
@@ -73,17 +88,36 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
     {
 #pragma omp for
         for (i = 0; i < NumEle; i++) {
-            /*DO INFILTRATION FRIST, then do LATERAL FLOW.*/
-            /*========infiltration/Recharge Function==============*/
-            Ele[i].updateElement(uYsf[i] , uYus[i] , uYgw[i] ); // step 1 update the kinf, kh, etc. for elements.
-            fun_Ele_Infiltraion(i, t); // step 2 calculate the infiltration.
-            fun_Ele_Recharge(i, t); // step 3 calculate the recharge.
+            if(lakeon && Ele[i].iLake > 0){
+                /* Lake elements */
+                Ele[i].updateLakeElement();
+                fun_Ele_lakeVertical(i, t);
+                int ilake = Ele[i].iLake - 1;
+                double inv_n = 1.0 / (double)lake[ilake].NumEleLake;
+#pragma omp atomic
+                qLakeEvap[ilake] += qEleEvapo[i] * inv_n;
+#pragma omp atomic
+                qLakePrcp[ilake] += qElePrep[i] * inv_n;
+            }else{
+                /* ET flux */
+                f_etFlux(i, t);
+                /*DO INFILTRATION FRIST, then do LATERAL FLOW.*/
+                /*========infiltration/Recharge Function==============*/
+                Ele[i].updateElement(uYsf[i] , uYus[i] , uYgw[i] ); // step 1 update the kinf, kh, etc. for elements.
+                fun_Ele_Infiltraion(i, t); // step 2 calculate the infiltration.
+                fun_Ele_Recharge(i, t); // step 3 calculate the recharge.
+            }
         }
 #pragma omp for
         for (i = 0; i < NumEle; i++) {
-            /*========surf/gw flow Function==============*/
-            fun_Ele_surface(i, t);  // AFTER infiltration, do the lateral flux. ESP for overland flow.
-            fun_Ele_sub(i, t);
+            if(lakeon && Ele[i].iLake > 0){
+                /* Lake elements */
+                fun_Ele_lakeHorizon(i, t);
+            }else{
+                /*========surf/gw flow Function==============*/
+                fun_Ele_surface(i, t);  // AFTER infiltration, do the lateral flux. ESP for overland flow.
+                fun_Ele_sub(i, t);
+            }
         } //end of for loop.
 #pragma omp for
         for (i = 0; i < NumSegmt; i++) {
@@ -94,6 +128,10 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
         for (i = 0; i < NumRiv; i++) {
             Flux_RiverDown(t, i);
         }
+    }
+    for (i = 0; i < NumLake; i++) {
+        qLakeEvap[i] = min(qLakeEvap[i], qLakePrcp[i] + yLakeStg[i]);
+        qLakeEvap[i] = max(0, qLakeEvap[i]);
     }
     /* Shared for both OpenMP and Serial, to update */
     PassValue();
@@ -165,6 +203,20 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
                 Riv[i].yBC = tsd_ryBC.getX(t, Riv[i].BC);
                 uYriv[i] = Riv[i].yBC;
             }
+        }
+
+#pragma omp for
+        for (i = 0; i < NumLake; i++) {
+            yLakeStg[i] = CLAMP_POLICY ? max(0.0, Y[iLAKE]) : Y[iLAKE];
+            lake[i].yStage = yLakeStg[i];
+            lake[i].update();
+            y2LakeArea[i] = lake[i].u_toparea;
+            QLakeSub[i] = 0.;
+            QLakeSurf[i] = 0.;
+            qLakeEvap[i] = 0.;
+            qLakePrcp[i] = 0.;
+            QLakeRivIn[i] = 0.;
+            QLakeRivOut[i] = 0.;
         }
     } // end omp parallel.
 }

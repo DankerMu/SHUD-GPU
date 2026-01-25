@@ -1220,4 +1220,106 @@ void Model_Data::gpuSyncStateFromDevice(N_Vector y)
     (void)N_VGetHostArrayPointer_Cuda(y);
 }
 
+void Model_Data::gpuSyncDiagnosticsFromDevice()
+{
+    if (d_model == nullptr || h_model == nullptr) {
+        return;
+    }
+    if (cuda_stream == nullptr) {
+        fprintf(stderr, "gpuSyncDiagnosticsFromDevice: cuda_stream is not initialized\n");
+        std::abort();
+    }
+
+    cudaStream_t stream = cuda_stream;
+
+    auto queueD2H = [&](void *dst, const void *src, size_t bytes, const char *what) {
+        if (bytes == 0) {
+            return;
+        }
+        if (dst == nullptr || src == nullptr) {
+            return;
+        }
+        const cudaError_t err = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToHost, stream);
+        cudaDie(err, what);
+    };
+
+    std::vector<double> h_QeleSurf_flat;
+    std::vector<double> h_QeleSub_flat;
+
+    if (NumEle > 0) {
+        const size_t bytes_ele = static_cast<size_t>(NumEle) * sizeof(double);
+        queueD2H(qEleInfil, h_model->qEleInfil, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleInfil)");
+        queueD2H(qEleExfil, h_model->qEleExfil, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleExfil)");
+        queueD2H(qEleRecharge, h_model->qEleRecharge, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEleRecharge)");
+
+        queueD2H(qEs, h_model->qEs, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEs)");
+        queueD2H(qEu, h_model->qEu, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEu)");
+        queueD2H(qEg, h_model->qEg, bytes_ele, "gpuSyncDiagnosticsFromDevice(qEg)");
+        queueD2H(qTu, h_model->qTu, bytes_ele, "gpuSyncDiagnosticsFromDevice(qTu)");
+        queueD2H(qTg, h_model->qTg, bytes_ele, "gpuSyncDiagnosticsFromDevice(qTg)");
+
+        queueD2H(Qe2r_Surf, h_model->Qe2r_Surf, bytes_ele, "gpuSyncDiagnosticsFromDevice(Qe2r_Surf)");
+        queueD2H(Qe2r_Sub, h_model->Qe2r_Sub, bytes_ele, "gpuSyncDiagnosticsFromDevice(Qe2r_Sub)");
+
+        const size_t n_edge = static_cast<size_t>(NumEle) * 3;
+        const size_t bytes_edge = n_edge * sizeof(double);
+        h_QeleSurf_flat.resize(n_edge);
+        h_QeleSub_flat.resize(n_edge);
+        queueD2H(h_QeleSurf_flat.data(), h_model->QeleSurf, bytes_edge, "gpuSyncDiagnosticsFromDevice(QeleSurf)");
+        queueD2H(h_QeleSub_flat.data(), h_model->QeleSub, bytes_edge, "gpuSyncDiagnosticsFromDevice(QeleSub)");
+    }
+
+    if (NumRiv > 0) {
+        const size_t bytes_riv = static_cast<size_t>(NumRiv) * sizeof(double);
+        queueD2H(QrivSurf, h_model->QrivSurf, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivSurf)");
+        queueD2H(QrivSub, h_model->QrivSub, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivSub)");
+        queueD2H(QrivDown, h_model->QrivDown, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivDown)");
+        queueD2H(QrivUp, h_model->QrivUp, bytes_riv, "gpuSyncDiagnosticsFromDevice(QrivUp)");
+    }
+
+    if (NumLake > 0) {
+        const size_t bytes_lake = static_cast<size_t>(NumLake) * sizeof(double);
+        queueD2H(QLakeSurf, h_model->QLakeSurf, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeSurf)");
+        queueD2H(QLakeSub, h_model->QLakeSub, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeSub)");
+        queueD2H(QLakeRivIn, h_model->QLakeRivIn, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeRivIn)");
+        queueD2H(QLakeRivOut, h_model->QLakeRivOut, bytes_lake, "gpuSyncDiagnosticsFromDevice(QLakeRivOut)");
+        queueD2H(qLakePrcp, h_model->qLakePrcp, bytes_lake, "gpuSyncDiagnosticsFromDevice(qLakePrcp)");
+        queueD2H(qLakeEvap, h_model->qLakeEvap, bytes_lake, "gpuSyncDiagnosticsFromDevice(qLakeEvap)");
+        queueD2H(y2LakeArea, h_model->y2LakeArea, bytes_lake, "gpuSyncDiagnosticsFromDevice(y2LakeArea)");
+    }
+
+    {
+        const cudaError_t err = cudaStreamSynchronize(stream);
+        cudaDie(err, "gpuSyncDiagnosticsFromDevice(cudaStreamSynchronize)");
+    }
+
+    if (NumEle <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < NumEle; i++) {
+        const size_t off = static_cast<size_t>(i) * 3;
+
+        if (QeleSurf != nullptr && QeleSurf[i] != nullptr && off + 2 < h_QeleSurf_flat.size()) {
+            QeleSurf[i][0] = h_QeleSurf_flat[off + 0];
+            QeleSurf[i][1] = h_QeleSurf_flat[off + 1];
+            QeleSurf[i][2] = h_QeleSurf_flat[off + 2];
+        }
+        if (QeleSub != nullptr && QeleSub[i] != nullptr && off + 2 < h_QeleSub_flat.size()) {
+            QeleSub[i][0] = h_QeleSub_flat[off + 0];
+            QeleSub[i][1] = h_QeleSub_flat[off + 1];
+            QeleSub[i][2] = h_QeleSub_flat[off + 2];
+        }
+
+        if (QeleSurfTot != nullptr && QeleSurf != nullptr && QeleSurf[i] != nullptr) {
+            const double Qe2r = (Qe2r_Surf != nullptr) ? Qe2r_Surf[i] : 0.0;
+            QeleSurfTot[i] = Qe2r + QeleSurf[i][0] + QeleSurf[i][1] + QeleSurf[i][2];
+        }
+        if (QeleSubTot != nullptr && QeleSub != nullptr && QeleSub[i] != nullptr) {
+            const double Qe2r = (Qe2r_Sub != nullptr) ? Qe2r_Sub[i] : 0.0;
+            QeleSubTot[i] = Qe2r + QeleSub[i][0] + QeleSub[i][1] + QeleSub[i][2];
+        }
+    }
+}
+
 #endif /* _CUDA_ON */

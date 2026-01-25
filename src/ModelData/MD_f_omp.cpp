@@ -165,7 +165,8 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
                 Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
                 uYgw[i] = Ele[i].yBC;
                 Ele[i].QBC = 0.;
-            }else{ // BC fix flux to GW
+            }else{ // BC fix flux to GW: uYgw remains a state variable (Y[iGW]); flux is applied in DYgw.
+                uYgw[i] = CLAMP_POLICY ? max(0.0, Y[iGW]) : Y[iGW];
                 Ele[i].QBC = tsd_eqBC.getX(t, -Ele[i].iBC);
             }
             /***** SS and BC *****/

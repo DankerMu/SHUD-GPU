@@ -9,7 +9,7 @@
 void Model_Data::f_applyDY_omp(double *DY, double t){
     double area;
     int isf, ius, igw, i;
-#pragma omp parallel  default(shared) private(i) num_threads(CS.num_threads)
+#pragma omp parallel  default(shared) private(i, area, isf, ius, igw) num_threads(CS.num_threads)
     {
 #pragma omp for
         for (i = 0; i < NumEle; i++) {

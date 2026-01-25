@@ -223,9 +223,10 @@ public:
     unsigned long nGpuPrecSetup = 0;
     std::vector<double> d2h_QeleSurf_flat;
     std::vector<double> d2h_QeleSub_flat;
+    std::vector<void *> pinned_host_buffers;
 #endif
-    
-private:
+	    
+	private:
     double *t_prcp;
     double *t_temp;
     double *t_rh;

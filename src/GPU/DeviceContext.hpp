@@ -115,8 +115,16 @@ struct DeviceModel {
     double *qTu = nullptr;
     double *qTg = nullptr;
 
+    /* Derived element diagnostics (computed on demand for host output). */
+    double *qEleTrans = nullptr;
+    double *qEleEvapo = nullptr;
+    double *qEleETA = nullptr;
+
     double *QeleSurf = nullptr; /* [NumEle * 3] */
     double *QeleSub = nullptr;  /* [NumEle * 3] */
+
+    double *QeleSurfTot = nullptr;
+    double *QeleSubTot = nullptr;
 
     double *QrivSurf = nullptr;
     double *QrivSub = nullptr;

@@ -62,7 +62,11 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
                 //            Newmann condition.
                 DY[iRIV] = 0.;
             }else{
-                DY[iRIV] = (- QrivUp[i] - QrivSurf[i] - QrivSub[i] - QrivDown[i] + Riv[i].qBC) / Riv[i].u_TopArea;
+                double dA = (- QrivUp[i] - QrivSurf[i] - QrivSub[i] - QrivDown[i] + Riv[i].qBC) / Riv[i].Length; // dA on CS
+                if(dA < -1. * Riv[i].u_CSarea){ /* The negative dA cannot larger then Availalbe Area. */
+                    dA = -1. * Riv[i].u_CSarea;
+                }
+                DY[iRIV] = fun_dAtodY(dA, Riv[i].u_topWidth, Riv[i].bankslope);
             }
             //        DY[iRIV] = 0.0;
 #ifdef DEBUG

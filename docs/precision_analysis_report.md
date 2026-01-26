@@ -423,3 +423,59 @@ CUDA 的 `rhs_kernels.cu` 会在 device 上生成：
 2. **`ySf` 的 599% 偏离属于“状态层面的严重偏离”，需要用 kernel 级别 verify 找到最早偏离字段，再判断是语义不一致（如 BC）还是数值路径差异（原子/预条件器/归约顺序）。**  
 3. **OMP 的 15% `ySf` 与 48% 的某些通量差异，既可能来自 CVODE+NVECTOR_OPENMP 的求解路径差异，也可能存在残留 UB（segment 并发写）。**  
 
+---
+
+## 10. 修复后验证（#64）
+
+本节基于合入以下修复后的重新验证结果：
+
+- #65：`iBC < 0` 语义对齐  
+- #67：OMP 并发写入修复  
+- #66：CUDA 预条件器开关（默认 ON，可用 `SHUD_CUDA_PRECOND=0` 关闭）
+
+目标：重新运行 CUDA `DEBUG_GPU_VERIFY`，确认“首次 mismatch”是否发生变化，并评估剩余差异。
+
+### 10.1 运行配置
+
+- 编译：`make shud_cuda DEBUG_GPU_VERIFY=1`
+- 运行窗口（仅在 `t≈1079-1083d` 执行 verify）：
+  - `SHUD_GPU_VERIFY=1`
+  - `SHUD_GPU_VERIFY_INTERVAL=1`
+  - `SHUD_GPU_VERIFY_T_MIN_DAY=1079`
+  - `SHUD_GPU_VERIFY_T_MAX_DAY=1083`
+  - `SHUD_GPU_VERIFY_STOP_ON_MISMATCH=1`
+- 容差（来自日志）：`atol=1e-8`, `rtol=1e-6`
+
+### 10.2 首次 mismatch：修复前 vs 修复后
+
+- 修复前（Issue #64 初步定位）：`t_day=1079.0`, kernel=`k_ele_local`, field=`qEu`, ele=`936`
+- 修复后（`gpu_verify_post_fix.log`）：
+  - `t=1553760.62 min`（≈ `1079.00043 day`）
+  - kernel=`k_ele_local`, field=`qEu`
+  - worst idx=`935`（ele=`936`）
+  - mismatches=`994/1147`
+  - `max_abs=1.44e-7`，threshold=`1e-8`
+
+结论：**首次 mismatch 的时间点/字段/element 与修复前一致**，说明 #65/#67/#66 未覆盖该偏离源头。
+
+### 10.3 当前剩余差异分析
+
+从 mismatch 的数值形态看：
+
+- CPU 侧 `qEu` 为 0，而 GPU 侧出现 `~1e-8~1e-7` 的非零值（单次 verify 即有 `994/1147` 元素超阈值）
+- worst 发生在 `ele=936`，但 mismatch 并非单点，而是“大片元素的小量非零”
+
+该形态更像是以下两类问题之一（或叠加）：
+
+1. **device 侧 `qEu` 未覆盖写/未清零**：在 `k_ele_local` 的某些分支下未写 `qEu`，导致残留值在后续被当作本步结果参与计算。  
+2. **CPU/GPU 阈值/截断分支不一致**：CPU 侧分段逻辑将值截断为 0，而 GPU 侧由于浮点路径差异保留了极小正值，并在阈值敏感系统中被后续放大。
+
+与 `ySf` 599% 偏离的关系：`qEu` 属于影响状态更新（`DYdot`）的上游通量项；首次 mismatch 出现在最差点 `t≈1081d` 之前，符合“早期小差异→后期事件分叉”的传播链假设。
+
+### 10.4 结论与建议
+
+- 结论：在当前容差下，CUDA 的首次 mismatch 仍由 `k_ele_local:qEu` 触发（`t≈1079d, ele=936`），修复后未前移/未消失。
+- 建议：
+  - 对 `src/GPU/rhs_kernels.cu::k_ele_local` 内 `qEu` 增加“全覆盖写/显式清零”的保障，避免分支遗漏导致残留值。
+  - 在更窄的窗口（如 `t≈1079-1081d`）增加 `DYdot`/`uYsf` 的 verify，以确认 `qEu` mismatch 是否确实是 `ySf` 偏离的第一传播源。
+  - 若要对准报告最差点（`t≈1081d, ele=1072`），建议将 verify 窗口进一步缩窄到 `1080.5-1081.5d` 并提高 `SHUD_GPU_VERIFY_MAX_PRINT` 以覆盖该 element 的打印。

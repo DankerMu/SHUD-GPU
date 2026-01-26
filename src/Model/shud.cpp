@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <iostream>
 //#include "f_element.hpp"
 //#include "f_River.hpp"
@@ -48,6 +51,30 @@ int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
 using namespace std;
 
+static int parsePositiveIntEnv(const char *name, int fallback)
+{
+    const char *value = getenv(name);
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+    errno = 0;
+    char *end = NULL;
+    const long v = strtol(value, &end, 10);
+    if (errno != 0 || end == value) {
+        return fallback;
+    }
+    while (*end != '\0' && isspace(static_cast<unsigned char>(*end))) {
+        end++;
+    }
+    if (*end != '\0') {
+        return fallback;
+    }
+    if (v <= 0 || v > INT_MAX) {
+        return fallback;
+    }
+    return static_cast<int>(v);
+}
+
 double SHUD(FileIn *fin, FileOut *fout){
     double ret = 0.;
     Model_Data  *MD;        /* Model Data                */
@@ -91,11 +118,34 @@ double SHUD(FileIn *fin, FileOut *fout){
             break;
         case BACKEND_OMP:
 #ifdef _OPENMP_ON
+        {
+            /*
+             * Reproducibility note:
+             * SUNDIALS NVECTOR_OPENMP parallel reductions (dot products, norms, etc.)
+             * can introduce small run-to-run floating-point differences due to
+             * non-associative summation order. These differences can cascade through
+             * the adaptive solver and make outputs non-bitwise-reproducible.
+             *
+             * The hydrologic flux kernels below are parallelized explicitly with
+             * OpenMP (num_threads=CS.num_threads). To prioritize deterministic
+             * results, keep NVECTOR_OPENMP math reductions single-threaded by
+             * default. Override via env var SHUD_NVEC_THREADS.
+             */
+            const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", 1);
             omp_set_num_threads(nthreads);
-            screeninfo("\nBackend: omp (NVECTOR_OPENMP). Threads = %d\n", nthreads);
-            udata = N_VNew_OpenMP(NY, nthreads, sunctx);
-            du = N_VNew_OpenMP(NY, nthreads, sunctx);
+            {
+                char msg[MAXLEN];
+                snprintf(msg,
+                         sizeof(msg),
+                         "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
+                         nthreads,
+                         nvec_threads);
+                screeninfo(msg);
+            }
+            udata = N_VNew_OpenMP(NY, nvec_threads, sunctx);
+            du = N_VNew_OpenMP(NY, nvec_threads, sunctx);
             break;
+        }
 #else
             fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
             myexit(-1);
@@ -313,6 +363,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     N5 = MD->NumLake;
 
     const int nthreads = max(MD->CS.num_threads, 1);
+    const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", 1);
 
     if (global_backend == BACKEND_CUDA) {
         fprintf(stderr,
@@ -324,7 +375,15 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     if (global_backend == BACKEND_OMP) {
 #ifdef _OPENMP_ON
         omp_set_num_threads(nthreads);
-        screeninfo("\nBackend: omp (NVECTOR_OPENMP). Threads = %d\n", nthreads);
+        {
+            char msg[MAXLEN];
+            snprintf(msg,
+                     sizeof(msg),
+                     "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
+                     nthreads,
+                     nvec_threads);
+            screeninfo(msg);
+        }
 #else
         fprintf(stderr, "\nERROR: --backend omp requested, but this build does not enable OpenMP.\n\n");
         myexit(-1);
@@ -341,17 +400,17 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 
     if (global_backend == BACKEND_OMP) {
 #ifdef _OPENMP_ON
-        u1 = N_VNew_OpenMP(N1, nthreads, sunctx1);
-        u2 = N_VNew_OpenMP(N2, nthreads, sunctx2);
-        u3 = N_VNew_OpenMP(N3, nthreads, sunctx3);
-        u4 = N_VNew_OpenMP(N4, nthreads, sunctx4);
-        u5 = N_VNew_OpenMP(N5, nthreads, sunctx5);
+        u1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
+        u2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
+        u3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
+        u4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
+        u5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
 
-        du1 = N_VNew_OpenMP(N1, nthreads, sunctx1);
-        du2 = N_VNew_OpenMP(N2, nthreads, sunctx2);
-        du3 = N_VNew_OpenMP(N3, nthreads, sunctx3);
-        du4 = N_VNew_OpenMP(N4, nthreads, sunctx4);
-        du5 = N_VNew_OpenMP(N5, nthreads, sunctx5);
+        du1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
+        du2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
+        du3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
+        du4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
+        du5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
 #endif
     } else {
         u1 = N_VNew_Serial(N1, sunctx1);

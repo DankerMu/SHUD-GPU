@@ -146,6 +146,44 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
 void Model_Data::f_update_omp(double  *Y, double *DY, double t){
     /* Initialization of temporary state variables */
     int i;
+
+    /*
+     * NOTE (OpenMP reproducibility / data race fix):
+     * _TimeSeriesData uses an internal ring-buffer (iNow/iNext) to cache forcing
+     * values. The internal pointer is advanced/mutated by movePointer() (and may
+     * trigger read_csv() I/O), so movePointer() is NOT thread-safe.
+     *
+     * getX() itself is a read-only accessor (it does not advance the pointer),
+     * but it depends on the internal pointer that is updated by movePointer().
+     *
+     * Fix: evaluate BC time-series serially here and cache scalar values
+     * (Ele[i].yBC/QBC, Riv[i].yBC/qBC) before entering the OpenMP-parallel region.
+     */
+    for (i = 0; i < NumEle; i++) {
+        if (Ele[i].iBC == 0) {
+            Ele[i].QBC = 0.0;
+            Ele[i].yBC = 0.0;
+        } else if (Ele[i].iBC > 0) { /* fixed head */
+            Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
+            Ele[i].QBC = 0.0;
+        } else { /* Ele[i].iBC < 0: fixed flux */
+            Ele[i].QBC = tsd_eqBC.getX(t, -Ele[i].iBC);
+            Ele[i].yBC = 0.0;
+        }
+    }
+    for (i = 0; i < NumRiv; i++) {
+        if (Riv[i].BC == 0) {
+            Riv[i].qBC = 0.0;
+            Riv[i].yBC = 0.0;
+        } else if (Riv[i].BC < 0) { /* fixed flux INTO river reaches */
+            Riv[i].qBC = tsd_rqBC.getX(t, -Riv[i].BC);
+            Riv[i].yBC = 0.0;
+        } else { /* Riv[i].BC > 0: fixed stage */
+            Riv[i].yBC = tsd_ryBC.getX(t, Riv[i].BC);
+            Riv[i].qBC = 0.0;
+        }
+    }
+
 #pragma omp parallel  default(shared) private(i) num_threads(CS.num_threads)
     {
 #pragma omp for
@@ -160,14 +198,10 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
             
             if(Ele[i].iBC == 0){ // NO BC
                 uYgw[i] = CLAMP_POLICY ? max(0.0, Y[iGW]) : Y[iGW];
-                Ele[i].QBC = 0.;
             }else if(Ele[i].iBC > 0){ // BC fix head
-                Ele[i].yBC = tsd_eyBC.getX(t, Ele[i].iBC);
                 uYgw[i] = Ele[i].yBC;
-                Ele[i].QBC = 0.;
             }else{ // BC fix flux to GW: uYgw remains a state variable (Y[iGW]); flux is applied in DYgw.
                 uYgw[i] = CLAMP_POLICY ? max(0.0, Y[iGW]) : Y[iGW];
-                Ele[i].QBC = tsd_eqBC.getX(t, -Ele[i].iBC);
             }
             /***** SS and BC *****/
 //            for(int j = 0; j<3;j++){
@@ -198,14 +232,8 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
              qrivDown and qrivUp are calculated in River fluxes. */
 //            QrivDown[i] = 0.;
             Riv[i].updateRiver(uYriv[i]);
-            /***** SS and BC *****/
-            Riv[i].qBC = 0.0;
-            if(Riv[i].BC == 0){
-                /* Void */
-            }else if(Riv[i].BC < 0){ // Fixed Flux INTO river Reaches.
-                Riv[i].qBC = tsd_rqBC.getX(t, -Riv[i].BC);
-            }else if (Riv[i].BC > 0){ // Fixed Stage of river reach.
-                Riv[i].yBC = tsd_ryBC.getX(t, Riv[i].BC);
+            /* BC values (Riv[i].qBC / Riv[i].yBC) were evaluated serially above. */
+            if (Riv[i].BC > 0) { // Fixed Stage of river reach.
                 uYriv[i] = Riv[i].yBC;
             }
         }

@@ -14,6 +14,8 @@ struct GpuVerifySettings {
     int max_print = 8;           /* Print up to N mismatching entries. */
     bool stop_on_mismatch = true; /* Stop after first mismatch. */
     bool abort_on_mismatch = false; /* Abort process on mismatch. */
+    double t_min = -std::numeric_limits<double>::infinity(); /* Time window start (minutes). */
+    double t_max = std::numeric_limits<double>::infinity();  /* Time window end (minutes). */
 };
 
 GpuVerifySettings gpuVerifySettingsFromEnv();

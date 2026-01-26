@@ -73,7 +73,8 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
 #ifdef DEBUG_GPU_VERIFY
     const GpuVerifySettings verify_settings = gpuVerifySettingsFromEnv();
     const unsigned long step = md->nFCall;
-    const bool do_verify = verify_settings.enabled && (verify_settings.interval > 0) && (step % verify_settings.interval == 0);
+    const bool within_time = (t >= verify_settings.t_min) && (t <= verify_settings.t_max);
+    const bool do_verify = verify_settings.enabled && within_time && (verify_settings.interval > 0) && (step % verify_settings.interval == 0);
 
     std::vector<double> cpu_Y;
     std::vector<double> cpu_DY;

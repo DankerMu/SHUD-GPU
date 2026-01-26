@@ -2,6 +2,7 @@
 
 #ifdef DEBUG_GPU_VERIFY
 
+#include <cmath>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -66,6 +67,25 @@ double parseDoubleEnv(const char *value, double fallback)
     return v;
 }
 
+bool parseFiniteDoubleEnv(const char *value, double *out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char *end = nullptr;
+    const double v = std::strtod(value, &end);
+    if (errno != 0 || end == value || !std::isfinite(v)) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 } // namespace
 
 GpuVerifySettings gpuVerifySettingsFromEnv()
@@ -79,6 +99,25 @@ GpuVerifySettings gpuVerifySettingsFromEnv()
         s.max_print = parseIntEnv(std::getenv("SHUD_GPU_VERIFY_MAX_PRINT"), s.max_print);
         s.stop_on_mismatch = parseBoolEnv(std::getenv("SHUD_GPU_VERIFY_STOP_ON_MISMATCH"), s.stop_on_mismatch);
         s.abort_on_mismatch = parseBoolEnv(std::getenv("SHUD_GPU_VERIFY_ABORT_ON_MISMATCH"), s.abort_on_mismatch);
+        {
+            const double kMinutesPerDay = 1440.0;
+            double v = 0.0;
+            if (parseFiniteDoubleEnv(std::getenv("SHUD_GPU_VERIFY_T_MIN"), &v)) {
+                s.t_min = v;
+            } else if (parseFiniteDoubleEnv(std::getenv("SHUD_GPU_VERIFY_T_MIN_DAY"), &v)) {
+                s.t_min = v * kMinutesPerDay;
+            }
+
+            if (parseFiniteDoubleEnv(std::getenv("SHUD_GPU_VERIFY_T_MAX"), &v)) {
+                s.t_max = v;
+            } else if (parseFiniteDoubleEnv(std::getenv("SHUD_GPU_VERIFY_T_MAX_DAY"), &v)) {
+                s.t_max = v * kMinutesPerDay;
+            }
+
+            if (s.t_max < s.t_min) {
+                s.enabled = false;
+            }
+        }
         if (s.interval == 0) {
             s.enabled = false;
         }

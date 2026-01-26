@@ -51,6 +51,74 @@ int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
 using namespace std;
 
+static bool iequalsN(const char *a, size_t n, const char *b)
+{
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (b[i] == '\0') {
+            return false;
+        }
+        const unsigned char ca = static_cast<unsigned char>(a[i]);
+        const unsigned char cb = static_cast<unsigned char>(b[i]);
+        if (tolower(ca) != tolower(cb)) {
+            return false;
+        }
+    }
+    return b[n] == '\0';
+}
+
+static bool parseBoolEnvValue(const char *value, int *out)
+{
+    if (out == NULL || value == NULL) {
+        return false;
+    }
+
+    const char *start = value;
+    while (*start != '\0' && isspace(static_cast<unsigned char>(*start))) {
+        start++;
+    }
+    if (*start == '\0') {
+        return false;
+    }
+    const char *end = start;
+    while (*end != '\0') {
+        end++;
+    }
+    while (end > start && isspace(static_cast<unsigned char>(end[-1]))) {
+        end--;
+    }
+    const size_t len = static_cast<size_t>(end - start);
+    if (len == 0) {
+        return false;
+    }
+
+    errno = 0;
+    char *num_end = NULL;
+    const long v = strtol(start, &num_end, 10);
+    if (errno == 0 && num_end != NULL && num_end != start) {
+        while (*num_end != '\0' && isspace(static_cast<unsigned char>(*num_end))) {
+            num_end++;
+        }
+        if (*num_end == '\0') {
+            *out = (v == 0) ? 0 : 1;
+            return true;
+        }
+    }
+
+    if (iequalsN(start, len, "true") || iequalsN(start, len, "on") || iequalsN(start, len, "yes")) {
+        *out = 1;
+        return true;
+    }
+    if (iequalsN(start, len, "false") || iequalsN(start, len, "off") || iequalsN(start, len, "no")) {
+        *out = 0;
+        return true;
+    }
+
+    return false;
+}
+
 static int parsePositiveIntEnv(const char *name, int fallback)
 {
     const char *value = getenv(name);
@@ -159,6 +227,14 @@ double SHUD(FileIn *fin, FileOut *fout){
                     screeninfo("NOTE: CUDA backend is experimental. Results may differ slightly from CPU.\n");
                     cuda_experimental_warned = true;
                 }
+            }
+            {
+                char msg[MAXLEN];
+                snprintf(msg,
+                         sizeof(msg),
+                         "CUDA preconditioner: %s (env SHUD_CUDA_PRECOND=0 or --no-precond to disable)\n",
+                         global_precond_enabled ? "ON" : "OFF");
+                screeninfo(msg);
             }
             udata = N_VNew_Cuda(NY, sunctx);
             du = N_VNew_Cuda(NY, sunctx);
@@ -577,6 +653,24 @@ int SHUD(int argc, char *argv[]){
     CommandIn CLI;
     FileIn *fin = new FileIn;
     FileOut *fout = new FileOut;
+
+    /* CUDA preconditioner toggle (default ON).
+     * - Env: SHUD_CUDA_PRECOND=0/1 (also accepts true/false/on/off/yes/no)
+     * - CLI: --precond / --no-precond (overrides env)
+     */
+    const char *precond_env = getenv("SHUD_CUDA_PRECOND");
+    if (precond_env != NULL && precond_env[0] != '\0') {
+        int enabled = global_precond_enabled;
+        if (parseBoolEnvValue(precond_env, &enabled)) {
+            global_precond_enabled = enabled;
+        } else {
+            fprintf(stderr,
+                    "WARNING: invalid SHUD_CUDA_PRECOND='%s' (expect 0/1, on/off, true/false); using %d.\n",
+                    precond_env,
+                    global_precond_enabled);
+        }
+    }
+
     CLI.parse(argc, argv);
     CLI.setFileIO(fin, fout);
 

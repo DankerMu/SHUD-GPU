@@ -206,8 +206,13 @@ __device__ inline void element_local_rhs(const DeviceModel *m,
         satKr = satKfun(satn_new, Beta);
     }
 
-    /* f_etFlux */
-    const double iBeta = soilMoistureStress(ThetaS, ThetaR, satn_new);
+    /* f_etFlux (match RHS behavior: use satn from previous RHS evaluation). */
+    double satn_prev = (m->ele_satn != nullptr) ? m->ele_satn[i] : -1.0;
+    const bool satn_prev_valid = (satn_prev == satn_prev) && satn_prev >= 0.0 && satn_prev <= 1.0;
+    if (!satn_prev_valid) {
+        satn_prev = satn_new;
+    }
+    const double iBeta = soilMoistureStress(ThetaS, ThetaR, satn_prev);
     const double va = VegFrac;
     const double vb = 1.0 - VegFrac;
     const double pj = 1.0 - ImpAF;

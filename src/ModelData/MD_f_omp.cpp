@@ -149,15 +149,15 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
 
     /*
      * NOTE (OpenMP reproducibility / data race fix):
-     * TimeSeriesData::getX() advances an internal pointer/ring-buffer to speed up
-     * interpolation. It is therefore NOT thread-safe.
+     * _TimeSeriesData uses an internal ring-buffer (iNow/iNext) to cache forcing
+     * values. The internal pointer is advanced/mutated by movePointer() (and may
+     * trigger read_csv() I/O), so movePointer() is NOT thread-safe.
      *
-     * f_update_omp() used to call getX() inside OpenMP-parallel loops (for element
-     * and river boundary conditions), which introduces a data race and can cause
-     * non-deterministic results across runs.
+     * getX() itself is a read-only accessor (it does not advance the pointer),
+     * but it depends on the internal pointer that is updated by movePointer().
      *
-     * Fix: evaluate BC time-series serially first, then use the cached values
-     * (Ele[i].yBC/QBC, Riv[i].yBC/qBC) inside the parallel region.
+     * Fix: evaluate BC time-series serially here and cache scalar values
+     * (Ele[i].yBC/QBC, Riv[i].yBC/qBC) before entering the OpenMP-parallel region.
      */
     for (i = 0; i < NumEle; i++) {
         if (Ele[i].iBC == 0) {

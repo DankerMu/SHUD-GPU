@@ -24,6 +24,7 @@ void CommandIn::SHUD_help(const char *prog){
     printf ("          Default depends on binary: shud→cpu, shud_omp→omp, shud_cuda→cuda.\n");
     printf (" --precond Enable CVODE preconditioner (CUDA backend only; default ON for --backend cuda).\n");
     printf (" --no-precond Disable CVODE preconditioner.\n");
+    printf ("          Env override: SHUD_CUDA_PRECOND=0 disables, =1 enables (default 1).\n");
     printf (" --help Print this message and exit.\n");
 }
 

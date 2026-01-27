@@ -2,6 +2,7 @@
 
 #ifdef _CUDA_ON
 
+#include "DeviceContext.hpp"
 #include "rhs_kernels.hpp"
 #include "Nvtx.hpp"
 
@@ -11,6 +12,7 @@
 #ifdef DEBUG_GPU_VERIFY
 #include "gpu_verify.hpp"
 
+#include <cmath>
 #include <vector>
 #endif
 
@@ -94,6 +96,36 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
         if (hY == nullptr) {
             fprintf(stderr, "ERROR: f_gpu: N_VGetHostArrayPointer_Cuda returned NULL in DEBUG_GPU_VERIFY.\n");
             return -1;
+        }
+
+        if (md->Ele != nullptr && md->h_model != nullptr && md->h_model->ele_satn != nullptr && md->NumEle > 0) {
+            std::vector<double> satn_prev(static_cast<size_t>(md->NumEle));
+            const cudaError_t err = cudaMemcpyAsync(
+                satn_prev.data(),
+                md->h_model->ele_satn,
+                satn_prev.size() * sizeof(double),
+                cudaMemcpyDeviceToHost,
+                rhs_stream);
+            if (err != cudaSuccess) {
+                fprintf(stderr,
+                        "CUDA_ERROR: f_gpu: cudaMemcpyAsync(ele_satn) failed in DEBUG_GPU_VERIFY: %s\n",
+                        cudaGetErrorString(err));
+                return -1;
+            }
+            const cudaError_t sync_err = cudaStreamSynchronize(rhs_stream);
+            if (sync_err != cudaSuccess) {
+                fprintf(stderr,
+                        "CUDA_ERROR: f_gpu: cudaStreamSynchronize(rhs_stream) failed after ele_satn copy in DEBUG_GPU_VERIFY: %s\n",
+                        cudaGetErrorString(sync_err));
+                return -1;
+            }
+
+            for (int i = 0; i < md->NumEle; i++) {
+                const double v = satn_prev[static_cast<size_t>(i)];
+                if (std::isfinite(v) && v >= 0.0 && v <= 1.0) {
+                    md->Ele[i].u_satn = v;
+                }
+            }
         }
 
         const int nY = md->NumY;

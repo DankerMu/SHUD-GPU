@@ -78,6 +78,12 @@ struct DeviceModel {
     double *seg_Cwr = nullptr;
     double *seg_KsatH = nullptr;
     double *seg_eqDistance = nullptr;
+    int *seg_order_by_riv = nullptr; /* [NumSeg] (sorted segment indices) */
+    int *seg_order_by_ele = nullptr; /* [NumSeg] (sorted segment indices) */
+    int *riv_seg_off = nullptr;      /* [NumRiv + 1] */
+    int *ele_seg_off = nullptr;      /* [NumEle + 1] */
+    double *seg_Qsurf = nullptr;     /* [NumSeg] */
+    double *seg_Qsub = nullptr;      /* [NumSeg] */
 
     /* Lake parameters */
     double *lake_zmin = nullptr;

@@ -367,6 +367,19 @@ __device__ inline void write_identity3(double *dst)
     dst[8] = 1.0;
 }
 
+__device__ inline void write_identity3_fp32(float *dst)
+{
+    dst[0] = 1.0f;
+    dst[1] = 0.0f;
+    dst[2] = 0.0f;
+    dst[3] = 0.0f;
+    dst[4] = 1.0f;
+    dst[5] = 0.0f;
+    dst[6] = 0.0f;
+    dst[7] = 0.0f;
+    dst[8] = 1.0f;
+}
+
 __global__ void k_psetup(const realtype *dY, const DeviceModel *m, double gamma, int clamp_policy)
 {
     if (dY == nullptr || m == nullptr || m->prec_inv == nullptr) {
@@ -501,6 +514,141 @@ __global__ void k_psetup(const realtype *dY, const DeviceModel *m, double gamma,
     }
 }
 
+__global__ void k_psetup_fp32(const realtype *dY, const DeviceModel *m, double gamma, int clamp_policy)
+{
+    if (dY == nullptr || m == nullptr || m->prec_inv_fp32 == nullptr) {
+        return;
+    }
+
+    const int nEle = m->NumEle;
+    const int nRiv = m->NumRiv;
+    const int nLake = m->NumLake;
+    const int nBlocks = nEle + nRiv + nLake;
+
+    for (int b = blockIdx.x * blockDim.x + threadIdx.x; b < nBlocks; b += blockDim.x * gridDim.x) {
+        if (b < nEle) {
+            const int i = b;
+            const int iLake = (m->ele_iLake != nullptr) ? m->ele_iLake[i] : 0;
+            float *inv = &m->prec_inv_fp32[static_cast<size_t>(i) * 9u];
+
+            if (iLake > 0) {
+                write_identity3_fp32(inv);
+                continue;
+            }
+
+            const int bc = (m->ele_iBC != nullptr) ? m->ele_iBC[i] : 0;
+            const bool gw_dirichlet = (bc > 0) && (m->ele_yBC != nullptr);
+
+            double ysf = static_cast<double>(dY[i]);
+            double yus = static_cast<double>(dY[i + nEle]);
+            double ygw = static_cast<double>(dY[i + 2 * nEle]);
+
+            if (clamp_policy) {
+                ysf = d_clamp_nonneg(ysf);
+                yus = d_clamp_nonneg(yus);
+                ygw = d_clamp_nonneg(ygw);
+            }
+
+            if (gw_dirichlet) {
+                ygw = m->ele_yBC[i];
+            }
+
+            double f_base[3];
+            element_local_rhs(m, i, ysf, yus, ygw, gw_dirichlet, &f_base[0], &f_base[1], &f_base[2]);
+
+            /* Finite-difference Jacobian (column-wise). */
+            double J[9] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            const double y_base[3] = {ysf, yus, ygw};
+            for (int col = 0; col < 3; col++) {
+                const double yj = y_base[col];
+                const double del = 1.0e-8 * (fabs(yj) + 1.0);
+                double yp[3] = {y_base[0], y_base[1], y_base[2]};
+                yp[col] += del;
+                double f_pert[3];
+                element_local_rhs(m, i, yp[0], yp[1], yp[2], gw_dirichlet, &f_pert[0], &f_pert[1], &f_pert[2]);
+                const double inv_del = 1.0 / del;
+                J[0 * 3 + col] = (f_pert[0] - f_base[0]) * inv_del;
+                J[1 * 3 + col] = (f_pert[1] - f_base[1]) * inv_del;
+                J[2 * 3 + col] = (f_pert[2] - f_base[2]) * inv_del;
+            }
+
+            /* M = I - gamma * J */
+            double M[9];
+            M[0] = 1.0 - gamma * J[0];
+            M[1] = 0.0 - gamma * J[1];
+            M[2] = 0.0 - gamma * J[2];
+            M[3] = 0.0 - gamma * J[3];
+            M[4] = 1.0 - gamma * J[4];
+            M[5] = 0.0 - gamma * J[5];
+            M[6] = 0.0 - gamma * J[6];
+            M[7] = 0.0 - gamma * J[7];
+            M[8] = 1.0 - gamma * J[8];
+
+            double invM[9];
+            if (!invert3x3(M, invM)) {
+                write_identity3_fp32(inv);
+                continue;
+            }
+
+            for (int k = 0; k < 9; k++) {
+                inv[k] = static_cast<float>(invM[k]);
+            }
+            continue;
+        }
+
+        const int off = b - nEle;
+        const size_t base = static_cast<size_t>(nEle) * 9u;
+        if (off < nRiv) {
+            const int i = off;
+            const int bc = (m->riv_BC != nullptr) ? m->riv_BC[i] : 0;
+            const bool dirichlet = (bc > 0) && (m->riv_yBC != nullptr);
+            const int idx = 3 * nEle + i;
+
+            double yriv = static_cast<double>(dY[idx]);
+            if (clamp_policy) {
+                yriv = d_clamp_nonneg(yriv);
+            }
+            if (dirichlet) {
+                yriv = m->riv_yBC[i];
+            }
+
+            const double f_base = river_local_rhs(m, i, yriv, dirichlet);
+            const double del = 1.0e-8 * (fabs(yriv) + 1.0);
+            const double f_pert = river_local_rhs(m, i, yriv + del, dirichlet);
+            const double J = (f_pert - f_base) / del;
+
+            const double M = 1.0 - gamma * J;
+            double inv_s = 1.0;
+            if (M == M && fabs(M) > 1e-24) {
+                inv_s = 1.0 / M;
+            }
+            m->prec_inv_fp32[base + static_cast<size_t>(i)] = static_cast<float>(inv_s);
+        } else {
+            const int l = off - nRiv;
+            if (l >= 0 && l < nLake) {
+                const int idx = 3 * nEle + nRiv + l;
+                double yStage = static_cast<double>(dY[idx]);
+                if (clamp_policy) {
+                    yStage = d_clamp_nonneg(yStage);
+                }
+
+                const double f_base = lake_local_rhs(m, l, yStage);
+                const double del = 1.0e-8 * (fabs(yStage) + 1.0);
+                const double f_pert = lake_local_rhs(m, l, yStage + del);
+                const double J = (f_pert - f_base) / del;
+
+                const double M = 1.0 - gamma * J;
+                double inv_s = 1.0;
+                if (M == M && fabs(M) > 1e-24) {
+                    inv_s = 1.0 / M;
+                }
+                m->prec_inv_fp32[base + static_cast<size_t>(nRiv) + static_cast<size_t>(l)] =
+                    static_cast<float>(inv_s);
+            }
+        }
+    }
+}
+
 __global__ void k_psolve(const realtype *r, realtype *z, const DeviceModel *m)
 {
     if (r == nullptr || z == nullptr || m == nullptr || m->prec_inv == nullptr) {
@@ -549,6 +697,54 @@ __global__ void k_psolve(const realtype *r, realtype *z, const DeviceModel *m)
     }
 }
 
+__global__ void k_psolve_fp32(const realtype *r, realtype *z, const DeviceModel *m)
+{
+    if (r == nullptr || z == nullptr || m == nullptr || m->prec_inv_fp32 == nullptr) {
+        return;
+    }
+
+    const int nEle = m->NumEle;
+    const int nRiv = m->NumRiv;
+    const int nLake = m->NumLake;
+    const int nBlocks = nEle + nRiv + nLake;
+    const size_t inv_base = static_cast<size_t>(nEle) * 9u;
+
+    for (int b = blockIdx.x * blockDim.x + threadIdx.x; b < nBlocks; b += blockDim.x * gridDim.x) {
+        if (b < nEle) {
+            const int i = b;
+            const float *inv = &m->prec_inv_fp32[static_cast<size_t>(i) * 9u];
+
+            const float r0 = static_cast<float>(r[i]);
+            const float r1 = static_cast<float>(r[i + nEle]);
+            const float r2 = static_cast<float>(r[i + 2 * nEle]);
+
+            const float z0 = inv[0] * r0 + inv[1] * r1 + inv[2] * r2;
+            const float z1 = inv[3] * r0 + inv[4] * r1 + inv[5] * r2;
+            const float z2 = inv[6] * r0 + inv[7] * r1 + inv[8] * r2;
+
+            z[i] = static_cast<realtype>(z0);
+            z[i + nEle] = static_cast<realtype>(z1);
+            z[i + 2 * nEle] = static_cast<realtype>(z2);
+            continue;
+        }
+
+        const int off = b - nEle;
+        const int base_y = 3 * nEle;
+        if (off < nRiv) {
+            const float inv_s = m->prec_inv_fp32[inv_base + static_cast<size_t>(off)];
+            const int idx = base_y + off;
+            z[idx] = static_cast<realtype>(inv_s * static_cast<float>(r[idx]));
+        } else {
+            const int l = off - nRiv;
+            if (l >= 0 && l < nLake) {
+                const float inv_s = m->prec_inv_fp32[inv_base + static_cast<size_t>(nRiv) + static_cast<size_t>(l)];
+                const int idx = base_y + nRiv + l;
+                z[idx] = static_cast<realtype>(inv_s * static_cast<float>(r[idx]));
+            }
+        }
+    }
+}
+
 inline int cap_blocks(int blocks) { return (blocks > 65535) ? 65535 : blocks; }
 
 } // namespace
@@ -566,7 +762,9 @@ int PSetup_cuda(realtype t,
 
     shud_nvtx::scoped_range range("PSetup_cuda");
     Model_Data *md = static_cast<Model_Data *>(user_data);
-    if (md == nullptr || md->d_model == nullptr || md->h_model == nullptr || md->h_model->prec_inv == nullptr) {
+    const bool use_fp32 = (global_precond_fp32 != 0);
+    if (md == nullptr || md->d_model == nullptr || md->h_model == nullptr ||
+        (use_fp32 ? (md->h_model->prec_inv_fp32 == nullptr) : (md->h_model->prec_inv == nullptr))) {
         return -1;
     }
 
@@ -610,7 +808,11 @@ int PSetup_cuda(realtype t,
         constexpr int kBlockSize = 256;
         const int blocks = cap_blocks((nBlocks + kBlockSize - 1) / kBlockSize);
         const int clamp_policy = CLAMP_POLICY;
-        k_psetup<<<blocks, kBlockSize, 0, stream>>>(dY, md->d_model, static_cast<double>(gamma), clamp_policy);
+        if (use_fp32) {
+            k_psetup_fp32<<<blocks, kBlockSize, 0, stream>>>(dY, md->d_model, static_cast<double>(gamma), clamp_policy);
+        } else {
+            k_psetup<<<blocks, kBlockSize, 0, stream>>>(dY, md->d_model, static_cast<double>(gamma), clamp_policy);
+        }
         {
             const cudaError_t err = cudaPeekAtLastError();
             if (err != cudaSuccess) {
@@ -661,7 +863,9 @@ int PSolve_cuda(realtype t,
 
     shud_nvtx::scoped_range range("PSolve_cuda");
     Model_Data *md = static_cast<Model_Data *>(user_data);
-    if (md == nullptr || md->d_model == nullptr || md->h_model == nullptr || md->h_model->prec_inv == nullptr) {
+    const bool use_fp32 = (global_precond_fp32 != 0);
+    if (md == nullptr || md->d_model == nullptr || md->h_model == nullptr ||
+        (use_fp32 ? (md->h_model->prec_inv_fp32 == nullptr) : (md->h_model->prec_inv == nullptr))) {
         return -1;
     }
 
@@ -723,7 +927,11 @@ int PSolve_cuda(realtype t,
     if (nBlocks > 0) {
         constexpr int kBlockSize = 256;
         const int blocks = cap_blocks((nBlocks + kBlockSize - 1) / kBlockSize);
-        k_psolve<<<blocks, kBlockSize, 0, stream>>>(dR, dZ, md->d_model);
+        if (use_fp32) {
+            k_psolve_fp32<<<blocks, kBlockSize, 0, stream>>>(dR, dZ, md->d_model);
+        } else {
+            k_psolve<<<blocks, kBlockSize, 0, stream>>>(dR, dZ, md->d_model);
+        }
         {
             const cudaError_t err = cudaPeekAtLastError();
             if (err != cudaSuccess) {

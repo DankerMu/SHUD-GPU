@@ -16,6 +16,8 @@ Options:
                            (default: all)
   --cuda-precond <default|on|off|auto>
                            CUDA CVODE preconditioner mode (default: default)
+  --cuda-precond-fp <default|fp64|fp32>
+                           CUDA preconditioner internal precision (default: default)
   --profile <none|nsys|nvprof>
                            Profiling mode (CUDA only; default: none)
   -h, --help               Show this help
@@ -44,6 +46,7 @@ REPEAT=3
 OUT_DIR="output/bench"
 PROFILE="none"
 CUDA_PRECOND="default"
+CUDA_PRECOND_FP="default"
 IO_GROUPS="all"
 
 while [[ $# -gt 0 ]]; do
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --out-dir|--out) OUT_DIR="${2:-}"; shift 2 ;;
     --io) IO_GROUPS="${2:-}"; shift 2 ;;
     --cuda-precond) CUDA_PRECOND="${2:-}"; shift 2 ;;
+    --cuda-precond-fp) CUDA_PRECOND_FP="${2:-}"; shift 2 ;;
     --profile) PROFILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown arg: $1" >&2; usage; exit 2 ;;
@@ -79,6 +83,10 @@ esac
 case "${CUDA_PRECOND}" in
   default|on|off|auto) ;;
   *) echo "ERROR: invalid --cuda-precond '${CUDA_PRECOND}' (expect default|on|off|auto)" >&2; exit 2 ;;
+esac
+case "${CUDA_PRECOND_FP}" in
+  default|fp64|fp32) ;;
+  *) echo "ERROR: invalid --cuda-precond-fp '${CUDA_PRECOND_FP}' (expect default|fp64|fp32)" >&2; exit 2 ;;
 esac
 if [[ -z "${IO_GROUPS}" ]]; then
   echo "ERROR: --io requires a non-empty value" >&2
@@ -128,9 +136,15 @@ run_one() {
   local env_prefix=()
   if [[ "${backend}" == "cuda" && "${CUDA_PRECOND}" != "default" ]]; then
     case "${CUDA_PRECOND}" in
-      on) env_prefix=( SHUD_CUDA_PRECOND=1 ) ;;
-      off) env_prefix=( SHUD_CUDA_PRECOND=0 ) ;;
-      auto) env_prefix=( SHUD_CUDA_PRECOND=auto ) ;;
+      on) env_prefix+=( SHUD_CUDA_PRECOND=1 ) ;;
+      off) env_prefix+=( SHUD_CUDA_PRECOND=0 ) ;;
+      auto) env_prefix+=( SHUD_CUDA_PRECOND=auto ) ;;
+    esac
+  fi
+  if [[ "${backend}" == "cuda" && "${CUDA_PRECOND_FP}" != "default" ]]; then
+    case "${CUDA_PRECOND_FP}" in
+      fp64) env_prefix+=( SHUD_CUDA_PRECOND_FP=fp64 ) ;;
+      fp32) env_prefix+=( SHUD_CUDA_PRECOND_FP=fp32 ) ;;
     esac
   fi
   if [[ "${backend}" == "cuda" && "${PROFILE}" != "none" ]]; then
@@ -177,6 +191,8 @@ run_one() {
   netf="$(extract_kv netf "${cvode_stats_line}")"
   npe="$(extract_kv npe "${cvode_stats_line}")"
   nps="$(extract_kv nps "${cvode_stats_line}")"
+  local precond_fp
+  precond_fp="$(extract_kv precond_fp "${cvode_stats_line}")"
 
   local bench_wall bench_cvode bench_io bench_forcing
   bench_wall="$(extract_kv wall_s "${bench_stats_line}")"
@@ -194,7 +210,7 @@ run_one() {
   strict_fp="$(extract_kv strict_fp "${bench_stats_line}")"
   det_reduce="$(extract_kv det_reduce "${bench_stats_line}")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "${backend}" \
     "${run_idx}" \
     "${wall_s}" \
@@ -215,8 +231,10 @@ run_one() {
     "${netf}" \
     "${npe}" \
     "${nps}" \
+    "${precond_fp}" \
     "${IO_GROUPS}" \
     "${CUDA_PRECOND}" \
+    "${CUDA_PRECOND_FP}" \
     "${log_file}"
 }
 
@@ -231,7 +249,7 @@ mkdir -p "${OUT_DIR}/${PROJECT}"
 BENCH_LOG="${OUT_DIR}/${PROJECT}/bench.log"
 SUMMARY_MD="${OUT_DIR}/${PROJECT}/bench_summary.md"
 
-printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\trhs_calls\trhs_kernels\trhs_launch_us\trhs_graph\tcuda_graph_mode\tstrict_fp\tdet_reduce\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
+printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\trhs_calls\trhs_kernels\trhs_launch_us\trhs_graph\tcuda_graph_mode\tstrict_fp\tdet_reduce\tnfe\tnli\tnni\tnetf\tnpe\tnps\tprecond_fp\tio_groups\tcuda_precond\tcuda_precond_fp\tlog\n" >"${BENCH_LOG}"
 
 for backend in "${BACKENDS[@]}"; do
   bin=""

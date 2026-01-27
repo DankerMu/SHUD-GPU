@@ -153,6 +153,7 @@ struct DeviceModel {
 
     /* Block-Jacobi preconditioner storage (PSetup/PSolve). */
     double *prec_inv = nullptr;
+    float *prec_inv_fp32 = nullptr;
 };
 
 #ifdef _CUDA_ON

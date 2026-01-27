@@ -163,6 +163,10 @@ enum PrecondMode { PRECOND_MODE_OFF = 0, PRECOND_MODE_ON = 1, PRECOND_MODE_AUTO 
 extern int global_precond_mode;
 /* Resolved CVODE preconditioner enable flag (CUDA backend only). */
 extern int global_precond_enabled;
+/* Preconditioner internal precision (CUDA backend only).
+ * 0: fp64 (default), 1: fp32 (mixed precision).
+ */
+extern int global_precond_fp32;
 
 enum CudaGraphMode { CUDA_GRAPH_OFF = 0, CUDA_GRAPH_ON = 1, CUDA_GRAPH_AUTO = 2 };
 /* Requested CUDA Graph mode for RHS launches (CUDA backend only). */

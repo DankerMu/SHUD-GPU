@@ -954,16 +954,24 @@ __global__ void k_ele_edge_sub(const DeviceModel *m)
     }
 }
 
-__global__ void k_seg_exchange(const DeviceModel *m)
+__global__ void k_seg_exchange_compute(const DeviceModel *m)
 {
     if (m == nullptr || m->NumSeg <= 0) {
+        return;
+    }
+
+    if (m->seg_Qsurf == nullptr || m->seg_Qsub == nullptr) {
         return;
     }
 
     for (int seg = blockIdx.x * blockDim.x + threadIdx.x; seg < m->NumSeg; seg += blockDim.x * gridDim.x) {
         const int iEle = (m->seg_iEle != nullptr) ? (m->seg_iEle[seg] - 1) : -1;
         const int iRiv = (m->seg_iRiv != nullptr) ? (m->seg_iRiv[seg] - 1) : -1;
-        if (iEle < 0 || iRiv < 0) {
+        double QsegSurf = 0.0;
+        double QsegSub = 0.0;
+        if (iEle < 0 || iEle >= m->NumEle || iRiv < 0 || iRiv >= m->NumRiv) {
+            m->seg_Qsurf[seg] = QsegSurf;
+            m->seg_Qsub[seg] = QsegSub;
             continue;
         }
 
@@ -972,17 +980,14 @@ __global__ void k_seg_exchange(const DeviceModel *m)
         const double qi = (m->qEleInfil != nullptr) ? m->qEleInfil[iEle] : 0.0;
         const double qex = (m->qEleExfil != nullptr) ? m->qEleExfil[iEle] : 0.0;
         isf = d_max(0.0, isf - qi + qex);
-        const double QsegSurf = weirFlow_jtoi(m->ele_z_surf[iEle],
-                                              isf,
-                                              m->ele_z_surf[iEle] - m->riv_depth[iRiv],
-                                              m->uYriv[iRiv],
-                                              m->ele_z_surf[iEle] + m->riv_zbank[iRiv],
-                                              m->seg_Cwr[seg],
-                                              m->seg_length[seg],
-                                              m->ele_depression[iEle]);
-
-        if (m->QrivSurf != nullptr) atomicAdd(&m->QrivSurf[iRiv], QsegSurf);
-        if (m->Qe2r_Surf != nullptr) atomicAdd(&m->Qe2r_Surf[iEle], -QsegSurf);
+        QsegSurf = weirFlow_jtoi(m->ele_z_surf[iEle],
+                                 isf,
+                                 m->ele_z_surf[iEle] - m->riv_depth[iRiv],
+                                 m->uYriv[iRiv],
+                                 m->ele_z_surf[iEle] + m->riv_zbank[iRiv],
+                                 m->seg_Cwr[seg],
+                                 m->seg_length[seg],
+                                 m->ele_depression[iEle]);
 
         /* Subsurface exchange */
         const double QsegSub_raw = flux_R2E_GW(m->uYriv[iRiv],
@@ -993,10 +998,80 @@ __global__ void k_seg_exchange(const DeviceModel *m)
                                                m->riv_KsatH[iRiv],
                                                m->seg_length[seg],
                                                m->riv_BedThick[iRiv]);
-        const double QsegSub = QsegSub_raw * m->fu_Sub[iEle];
+        QsegSub = QsegSub_raw;
+        if (m->fu_Sub != nullptr) {
+            QsegSub *= m->fu_Sub[iEle];
+        }
 
-        if (m->QrivSub != nullptr) atomicAdd(&m->QrivSub[iRiv], QsegSub);
-        if (m->Qe2r_Sub != nullptr) atomicAdd(&m->Qe2r_Sub[iEle], -QsegSub);
+        m->seg_Qsurf[seg] = QsegSurf;
+        m->seg_Qsub[seg] = QsegSub;
+    }
+}
+
+__global__ void k_seg_reduce(const DeviceModel *m)
+{
+    if (m == nullptr || m->NumSeg <= 0) {
+        return;
+    }
+    if (m->seg_Qsurf == nullptr || m->seg_Qsub == nullptr) {
+        return;
+    }
+    if (m->seg_order_by_riv == nullptr || m->riv_seg_off == nullptr) {
+        return;
+    }
+    if (m->seg_order_by_ele == nullptr || m->ele_seg_off == nullptr) {
+        return;
+    }
+
+    constexpr int kMaxBlock = 256;
+    __shared__ double sh_surf[kMaxBlock];
+    __shared__ double sh_sub[kMaxBlock];
+
+    const int nRiv = m->NumRiv;
+    const int nEle = m->NumEle;
+    const int total = nRiv + nEle;
+    if (total <= 0) {
+        return;
+    }
+
+    for (int b = static_cast<int>(blockIdx.x); b < total; b += static_cast<int>(gridDim.x)) {
+        const bool is_riv = (b < nRiv);
+        const int start = is_riv ? m->riv_seg_off[b] : m->ele_seg_off[b - nRiv];
+        const int end = is_riv ? m->riv_seg_off[b + 1] : m->ele_seg_off[(b - nRiv) + 1];
+        const int *order = is_riv ? m->seg_order_by_riv : m->seg_order_by_ele;
+
+        double local_surf = 0.0;
+        double local_sub = 0.0;
+        for (int idx = start + static_cast<int>(threadIdx.x); idx < end; idx += static_cast<int>(blockDim.x)) {
+            const int seg = order[idx];
+            local_surf += m->seg_Qsurf[seg];
+            local_sub += m->seg_Qsub[seg];
+        }
+
+        sh_surf[threadIdx.x] = local_surf;
+        sh_sub[threadIdx.x] = local_sub;
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+            double sum_surf = 0.0;
+            double sum_sub = 0.0;
+            const int n = static_cast<int>(blockDim.x);
+            for (int t = 0; t < n; t++) {
+                sum_surf += sh_surf[t];
+                sum_sub += sh_sub[t];
+            }
+
+            if (is_riv) {
+                if (m->QrivSurf != nullptr) m->QrivSurf[b] = sum_surf;
+                if (m->QrivSub != nullptr) m->QrivSub[b] = sum_sub;
+            } else {
+                const int ele = b - nRiv;
+                if (m->Qe2r_Surf != nullptr) m->Qe2r_Surf[ele] = -sum_surf;
+                if (m->Qe2r_Sub != nullptr) m->Qe2r_Sub[ele] = -sum_sub;
+            }
+        }
+
+        __syncthreads();
     }
 }
 
@@ -1400,7 +1475,13 @@ void launch_rhs_kernels(realtype t,
         if (nSeg > 0) {
             const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
             kernel_nodes++;
-            k_seg_exchange<<<blocks, kBlockSize, 0, stream>>>(d_model);
+            k_seg_exchange_compute<<<blocks, kBlockSize, 0, stream>>>(d_model);
+            const int total = nRiv + nEle;
+            if (total > 0) {
+                const int reduce_blocks = cap_blocks(total);
+                kernel_nodes++;
+                k_seg_reduce<<<reduce_blocks, kBlockSize, 0, stream>>>(d_model);
+            }
         }
 #ifdef DEBUG_GPU_VERIFY
         if (shouldVerify(verify) && !g_gpu_verify_halted) {
@@ -1413,15 +1494,15 @@ void launch_rhs_kernels(realtype t,
             ok &= syncVerifyStream(stream);
             if (ok) {
                 const auto &ctx = *verify;
-                (void)compareAndReport("k_seg_exchange", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
+                (void)compareAndReport("k_seg_reduce", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_exchange", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
+                    (void)compareAndReport("k_seg_reduce", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
                 }
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_exchange", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
+                    (void)compareAndReport("k_seg_reduce", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
                 }
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_exchange", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
+                    (void)compareAndReport("k_seg_reduce", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
                 }
             }
         }

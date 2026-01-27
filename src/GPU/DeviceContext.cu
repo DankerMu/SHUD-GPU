@@ -7,8 +7,10 @@
 #include <cuda_runtime.h>
 
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 #include <vector>
 
 namespace {
@@ -153,6 +155,12 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.seg_Cwr);
     cudaFreeIfNotNull(h.seg_KsatH);
     cudaFreeIfNotNull(h.seg_eqDistance);
+    cudaFreeIfNotNull(h.seg_order_by_riv);
+    cudaFreeIfNotNull(h.seg_order_by_ele);
+    cudaFreeIfNotNull(h.riv_seg_off);
+    cudaFreeIfNotNull(h.ele_seg_off);
+    cudaFreeIfNotNull(h.seg_Qsurf);
+    cudaFreeIfNotNull(h.seg_Qsub);
 
     cudaFreeIfNotNull(h.lake_zmin);
     cudaFreeIfNotNull(h.lake_invNumEle);
@@ -748,6 +756,101 @@ void gpuInit(Model_Data *md)
         err = cudaAllocAndUpload(&h.seg_eqDistance, seg_eqDistance.data(), seg_eqDistance.size());
         if (err != cudaSuccess) {
             fprintf(stderr, "gpuInit: failed to upload seg_eqDistance\n");
+            goto fail;
+        }
+
+        err = cudaAllocAndUpload(&h.seg_Qsurf, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumSeg));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate seg_Qsurf\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.seg_Qsub, static_cast<const double *>(nullptr), static_cast<size_t>(h.NumSeg));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to allocate seg_Qsub\n");
+            goto fail;
+        }
+
+        std::vector<int> seg_order_by_riv(static_cast<size_t>(h.NumSeg));
+        std::vector<int> seg_order_by_ele(static_cast<size_t>(h.NumSeg));
+        std::iota(seg_order_by_riv.begin(), seg_order_by_riv.end(), 0);
+        std::iota(seg_order_by_ele.begin(), seg_order_by_ele.end(), 0);
+
+        const int riv_sentinel = h.NumRiv + 1;
+        std::stable_sort(seg_order_by_riv.begin(),
+                         seg_order_by_riv.end(),
+                         [&](int a, int b) {
+                             int ra = seg_iRiv[static_cast<size_t>(a)];
+                             int rb = seg_iRiv[static_cast<size_t>(b)];
+                             if (ra <= 0 || ra > h.NumRiv) ra = riv_sentinel;
+                             if (rb <= 0 || rb > h.NumRiv) rb = riv_sentinel;
+                             if (ra != rb) return ra < rb;
+                             int ea = seg_iEle[static_cast<size_t>(a)];
+                             int eb = seg_iEle[static_cast<size_t>(b)];
+                             if (ea != eb) return ea < eb;
+                             return a < b;
+                         });
+
+        const int ele_sentinel = h.NumEle + 1;
+        std::stable_sort(seg_order_by_ele.begin(),
+                         seg_order_by_ele.end(),
+                         [&](int a, int b) {
+                             int ea = seg_iEle[static_cast<size_t>(a)];
+                             int eb = seg_iEle[static_cast<size_t>(b)];
+                             if (ea <= 0 || ea > h.NumEle) ea = ele_sentinel;
+                             if (eb <= 0 || eb > h.NumEle) eb = ele_sentinel;
+                             if (ea != eb) return ea < eb;
+                             int ra = seg_iRiv[static_cast<size_t>(a)];
+                             int rb = seg_iRiv[static_cast<size_t>(b)];
+                             if (ra != rb) return ra < rb;
+                             return a < b;
+                         });
+
+        std::vector<int> riv_seg_off(static_cast<size_t>(h.NumRiv) + 1u, 0);
+        int pos = 0;
+        for (int r = 1; r <= h.NumRiv; r++) {
+            riv_seg_off[static_cast<size_t>(r - 1)] = pos;
+            while (pos < h.NumSeg) {
+                const int seg = seg_order_by_riv[static_cast<size_t>(pos)];
+                if (seg_iRiv[static_cast<size_t>(seg)] != r) {
+                    break;
+                }
+                pos++;
+            }
+        }
+        riv_seg_off[static_cast<size_t>(h.NumRiv)] = pos;
+
+        std::vector<int> ele_seg_off(static_cast<size_t>(h.NumEle) + 1u, 0);
+        pos = 0;
+        for (int e = 1; e <= h.NumEle; e++) {
+            ele_seg_off[static_cast<size_t>(e - 1)] = pos;
+            while (pos < h.NumSeg) {
+                const int seg = seg_order_by_ele[static_cast<size_t>(pos)];
+                if (seg_iEle[static_cast<size_t>(seg)] != e) {
+                    break;
+                }
+                pos++;
+            }
+        }
+        ele_seg_off[static_cast<size_t>(h.NumEle)] = pos;
+
+        err = cudaAllocAndUpload(&h.seg_order_by_riv, seg_order_by_riv.data(), seg_order_by_riv.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload seg_order_by_riv\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.seg_order_by_ele, seg_order_by_ele.data(), seg_order_by_ele.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload seg_order_by_ele\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.riv_seg_off, riv_seg_off.data(), riv_seg_off.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload riv_seg_off\n");
+            goto fail;
+        }
+        err = cudaAllocAndUpload(&h.ele_seg_off, ele_seg_off.data(), ele_seg_off.size());
+        if (err != cudaSuccess) {
+            fprintf(stderr, "gpuInit: failed to upload ele_seg_off\n");
             goto fail;
         }
     }

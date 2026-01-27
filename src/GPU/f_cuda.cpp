@@ -7,6 +7,7 @@
 #include "Nvtx.hpp"
 
 #include <cuda_runtime_api.h>
+#include <chrono>
 #include <cstdio>
 
 #ifdef DEBUG_GPU_VERIFY
@@ -15,6 +16,122 @@
 #include <cmath>
 #include <vector>
 #endif
+
+namespace {
+
+bool shouldUseCudaGraph(const Model_Data *md
+#ifdef DEBUG_GPU_VERIFY
+                        ,
+                        const GpuVerifyContext *verify
+#endif
+)
+{
+    if (md == nullptr) {
+        return false;
+    }
+    if (global_backend != BACKEND_CUDA) {
+        return false;
+    }
+    if (global_cuda_graph_mode == CUDA_GRAPH_OFF) {
+        return false;
+    }
+#ifdef DEBUG_GPU_VERIFY
+    if (verify != nullptr) {
+        return false;
+    }
+#endif
+    if (global_cuda_graph_mode == CUDA_GRAPH_ON) {
+        return true;
+    }
+    if (md->NumY <= 0) {
+        return false;
+    }
+    return md->NumY <= global_cuda_graph_max_ny;
+}
+
+void destroyRhsGraph(Model_Data *md)
+{
+    if (md == nullptr) {
+        return;
+    }
+    if (md->rhs_graph_exec != nullptr) {
+        (void)cudaGraphExecDestroy(md->rhs_graph_exec);
+        md->rhs_graph_exec = nullptr;
+    }
+    if (md->rhs_graph != nullptr) {
+        (void)cudaGraphDestroy(md->rhs_graph);
+        md->rhs_graph = nullptr;
+    }
+    md->rhs_graph_dY = nullptr;
+    md->rhs_graph_dYdot = nullptr;
+    md->rhs_graph_clamp_policy = 0;
+    md->rhs_graph_kernel_nodes = 0;
+}
+
+bool captureRhsGraph(Model_Data *md, const realtype *dY, realtype *dYdot, cudaStream_t stream)
+{
+    if (md == nullptr || md->d_model == nullptr || md->h_model == nullptr) {
+        return false;
+    }
+    if (md->rhs_graph_failed) {
+        return false;
+    }
+
+    destroyRhsGraph(md);
+
+    const cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        fprintf(stderr, "CUDA_ERROR: rhs graph capture: cudaStreamSynchronize failed: %s\n", cudaGetErrorString(sync_err));
+        md->rhs_graph_failed = 1;
+        return false;
+    }
+
+    cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+    const cudaError_t status_err = cudaStreamIsCapturing(stream, &capture_status);
+    if (status_err == cudaSuccess && capture_status != cudaStreamCaptureStatusNone) {
+        fprintf(stderr, "WARNING: rhs graph capture skipped (stream already capturing)\n");
+        return false;
+    }
+
+    cudaError_t err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA_ERROR: rhs graph capture: cudaStreamBeginCapture failed: %s\n", cudaGetErrorString(err));
+        md->rhs_graph_failed = 1;
+        return false;
+    }
+
+    RhsLaunchStats stats{};
+    launch_rhs_kernels((realtype)0, dY, dYdot, md->d_model, md->h_model, stream, &stats
+#ifdef DEBUG_GPU_VERIFY
+                       ,
+                       nullptr
+#endif
+    );
+
+    err = cudaStreamEndCapture(stream, &md->rhs_graph);
+    if (err != cudaSuccess || md->rhs_graph == nullptr) {
+        fprintf(stderr, "CUDA_ERROR: rhs graph capture: cudaStreamEndCapture failed: %s\n", cudaGetErrorString(err));
+        md->rhs_graph_failed = 1;
+        destroyRhsGraph(md);
+        return false;
+    }
+
+    err = cudaGraphInstantiate(&md->rhs_graph_exec, md->rhs_graph, nullptr, nullptr, 0);
+    if (err != cudaSuccess || md->rhs_graph_exec == nullptr) {
+        fprintf(stderr, "CUDA_ERROR: rhs graph capture: cudaGraphInstantiate failed: %s\n", cudaGetErrorString(err));
+        md->rhs_graph_failed = 1;
+        destroyRhsGraph(md);
+        return false;
+    }
+
+    md->rhs_graph_dY = dY;
+    md->rhs_graph_dYdot = dYdot;
+    md->rhs_graph_clamp_policy = CLAMP_POLICY;
+    md->rhs_graph_kernel_nodes = stats.kernel_nodes;
+    return true;
+}
+
+} // namespace
 
 int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
 {
@@ -219,9 +336,57 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
         verify_ptr = &verify_ctx;
     }
 
-    launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, md->h_model, rhs_stream, verify_ptr);
+    md->nGpuRhsCalls++;
+    RhsLaunchStats rhs_stats{};
+    bool use_graph = shouldUseCudaGraph(md, verify_ptr);
+    if (use_graph && (md->rhs_graph_exec == nullptr || md->rhs_graph_dY != dY || md->rhs_graph_dYdot != dYdot ||
+                      md->rhs_graph_clamp_policy != CLAMP_POLICY)) {
+        (void)captureRhsGraph(md, dY, dYdot, rhs_stream);
+    }
+
+    const auto launch_start = std::chrono::steady_clock::now();
+    if (use_graph && md->rhs_graph_exec != nullptr) {
+        const cudaError_t err = cudaGraphLaunch(md->rhs_graph_exec, rhs_stream);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA_ERROR: f_gpu: cudaGraphLaunch failed: %s\n", cudaGetErrorString(err));
+            destroyRhsGraph(md);
+            md->rhs_graph_failed = 1;
+            return -1;
+        }
+        rhs_stats.kernel_nodes = md->rhs_graph_kernel_nodes;
+        md->nGpuRhsLaunchCalls++;
+    } else {
+        launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, md->h_model, rhs_stream, &rhs_stats, verify_ptr);
+        md->nGpuRhsLaunchCalls += rhs_stats.kernel_nodes;
+    }
+    md->gpuRhsLaunchCpu_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - launch_start).count();
+    md->nGpuRhsKernelNodes += rhs_stats.kernel_nodes;
 #else
-    launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, md->h_model, rhs_stream);
+    md->nGpuRhsCalls++;
+    RhsLaunchStats rhs_stats{};
+    bool use_graph = shouldUseCudaGraph(md);
+    if (use_graph && (md->rhs_graph_exec == nullptr || md->rhs_graph_dY != dY || md->rhs_graph_dYdot != dYdot ||
+                      md->rhs_graph_clamp_policy != CLAMP_POLICY)) {
+        (void)captureRhsGraph(md, dY, dYdot, rhs_stream);
+    }
+
+    const auto launch_start = std::chrono::steady_clock::now();
+    if (use_graph && md->rhs_graph_exec != nullptr) {
+        const cudaError_t err = cudaGraphLaunch(md->rhs_graph_exec, rhs_stream);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "CUDA_ERROR: f_gpu: cudaGraphLaunch failed: %s\n", cudaGetErrorString(err));
+            destroyRhsGraph(md);
+            md->rhs_graph_failed = 1;
+            return -1;
+        }
+        rhs_stats.kernel_nodes = md->rhs_graph_kernel_nodes;
+        md->nGpuRhsLaunchCalls++;
+    } else {
+        launch_rhs_kernels((realtype)t, dY, dYdot, md->d_model, md->h_model, rhs_stream, &rhs_stats);
+        md->nGpuRhsLaunchCalls += rhs_stats.kernel_nodes;
+    }
+    md->gpuRhsLaunchCpu_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - launch_start).count();
+    md->nGpuRhsKernelNodes += rhs_stats.kernel_nodes;
 #endif
     {
         const cudaError_t err = cudaPeekAtLastError();

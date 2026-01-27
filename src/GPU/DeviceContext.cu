@@ -283,6 +283,23 @@ void gpuInit(Model_Data *md)
     md->precond_setup_event = precond_event;
     md->nGpuForcingCopy = 0;
     md->nGpuPrecSetup = 0;
+    md->nGpuRhsCalls = 0;
+    md->nGpuRhsKernelNodes = 0;
+    md->nGpuRhsLaunchCalls = 0;
+    md->gpuRhsLaunchCpu_s = 0.0;
+    md->rhs_graph_failed = 0;
+    md->rhs_graph_kernel_nodes = 0;
+    md->rhs_graph_clamp_policy = 0;
+    md->rhs_graph_dY = nullptr;
+    md->rhs_graph_dYdot = nullptr;
+    if (md->rhs_graph_exec != nullptr) {
+        (void)cudaGraphExecDestroy(md->rhs_graph_exec);
+        md->rhs_graph_exec = nullptr;
+    }
+    if (md->rhs_graph != nullptr) {
+        (void)cudaGraphDestroy(md->rhs_graph);
+        md->rhs_graph = nullptr;
+    }
 
     /* ------------------------------ Element static parameters ------------------------------ */
     std::vector<double> ele_area(h.NumEle);
@@ -1220,6 +1237,19 @@ void gpuFree(Model_Data *md)
     if (md == nullptr) {
         return;
     }
+
+    if (md->rhs_graph_exec != nullptr) {
+        (void)cudaGraphExecDestroy(md->rhs_graph_exec);
+        md->rhs_graph_exec = nullptr;
+    }
+    if (md->rhs_graph != nullptr) {
+        (void)cudaGraphDestroy(md->rhs_graph);
+        md->rhs_graph = nullptr;
+    }
+    md->rhs_graph_dY = nullptr;
+    md->rhs_graph_dYdot = nullptr;
+    md->rhs_graph_kernel_nodes = 0;
+    md->rhs_graph_failed = 0;
 
     delete md->h_model;
     md->h_model = nullptr;

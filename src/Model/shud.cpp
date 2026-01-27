@@ -48,6 +48,8 @@ int global_backend = BACKEND_CPU;
 #endif
 int global_precond_mode = PRECOND_MODE_ON; /* Requested CVODE preconditioning mode (CUDA backend only). */
 int global_precond_enabled = 1; /* Resolved CVODE preconditioning enable flag (CUDA backend only). */
+int global_cuda_graph_mode = CUDA_GRAPH_AUTO; /* Requested CUDA Graph capture mode (CUDA backend only). */
+int global_cuda_graph_max_ny = 200000; /* Auto mode threshold: enable graph when NumY <= this value. */
 int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
 int global_output_groups = OUTPUT_GROUP_ALL; /* Runtime output group selection (OutputGroupMask bitmask). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
@@ -159,6 +161,20 @@ static const char *precondModeName(int mode)
         case PRECOND_MODE_ON:
             return "on";
         case PRECOND_MODE_AUTO:
+            return "auto";
+        default:
+            return "unknown";
+    }
+}
+
+static const char *cudaGraphModeName(int mode)
+{
+    switch (mode) {
+        case CUDA_GRAPH_OFF:
+            return "off";
+        case CUDA_GRAPH_ON:
+            return "on";
+        case CUDA_GRAPH_AUTO:
             return "auto";
         default:
             return "unknown";
@@ -569,11 +585,28 @@ double SHUD(FileIn *fin, FileOut *fout){
 
     const double bench_wall_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - bench_wall_start).count();
-    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f\n\n",
+    unsigned long rhs_calls = 0;
+    double rhs_kernels = 0.0;
+    double rhs_launch_us = 0.0;
+    int rhs_graph = 0;
+#ifdef _CUDA_ON
+    if (global_backend == BACKEND_CUDA && MD != nullptr && MD->d_model != nullptr && MD->nGpuRhsCalls > 0) {
+        rhs_calls = MD->nGpuRhsCalls;
+        rhs_kernels = static_cast<double>(MD->nGpuRhsKernelNodes) / static_cast<double>(MD->nGpuRhsCalls);
+        rhs_launch_us = (MD->gpuRhsLaunchCpu_s * 1.0e6) / static_cast<double>(MD->nGpuRhsCalls);
+        rhs_graph = (MD->rhs_graph_exec != nullptr) ? 1 : 0;
+    }
+#endif
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s\n\n",
            bench_wall_s,
            bench_cvode_s,
            bench_io_s,
-           bench_forcing_s);
+           bench_forcing_s,
+           rhs_calls,
+           rhs_kernels,
+           rhs_launch_us,
+           rhs_graph,
+           cudaGraphModeName(global_cuda_graph_mode));
 
     MD->modelSummary(1);
     /* Free memory */
@@ -899,6 +932,28 @@ int SHUD(int argc, char *argv[]){
             }
         }
     }
+
+    /* CUDA RHS graph capture toggle (default AUTO).
+     * - Env: SHUD_CUDA_GRAPH=0/1/auto (also accepts true/false/on/off/yes/no)
+     * - Env: NY_CUDA_GRAPH_MAX (auto threshold, default 200000)
+     */
+    const char *graph_env = getenv("SHUD_CUDA_GRAPH");
+    if (graph_env != NULL && graph_env[0] != '\0') {
+        if (parseAutoEnvValue(graph_env)) {
+            global_cuda_graph_mode = CUDA_GRAPH_AUTO;
+        } else {
+            int enabled = (global_cuda_graph_mode != CUDA_GRAPH_OFF);
+            if (parseBoolEnvValue(graph_env, &enabled)) {
+                global_cuda_graph_mode = enabled ? CUDA_GRAPH_ON : CUDA_GRAPH_OFF;
+            } else {
+                fprintf(stderr,
+                        "WARNING: invalid SHUD_CUDA_GRAPH='%s' (expect 0/1/auto, on/off, true/false); using %s.\n",
+                        graph_env,
+                        cudaGraphModeName(global_cuda_graph_mode));
+            }
+        }
+    }
+    global_cuda_graph_max_ny = parsePositiveIntEnv("NY_CUDA_GRAPH_MAX", global_cuda_graph_max_ny);
 
     CLI.parse(argc, argv);
     CLI.setFileIO(fin, fout);

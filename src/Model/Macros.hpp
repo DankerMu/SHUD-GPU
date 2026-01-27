@@ -163,6 +163,8 @@ extern int global_precond_enabled;
 
 enum Backend { BACKEND_CPU = 0, BACKEND_OMP = 1, BACKEND_CUDA = 2 };
 extern int global_backend;
+/* Whether --backend was explicitly set by CLI. */
+extern int global_backend_cli_set;
 /* ClampPolicy: whether to clamp state variables to non-negative values before flux computation.
  * 1 (default): clamp enabled. 0: clamp disabled (legacy serial behavior).
  *

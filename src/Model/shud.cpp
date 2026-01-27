@@ -865,11 +865,28 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 //    fclose(fp4);
     const double bench_wall_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - bench_wall_start).count();
-    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f\n\n",
+    unsigned long rhs_calls = 0;
+    double rhs_kernels = 0.0;
+    double rhs_launch_us = 0.0;
+    int rhs_graph = 0;
+#ifdef _CUDA_ON
+    if (global_backend == BACKEND_CUDA && MD != nullptr && MD->d_model != nullptr && MD->nGpuRhsCalls > 0) {
+        rhs_calls = MD->nGpuRhsCalls;
+        rhs_kernels = static_cast<double>(MD->nGpuRhsKernelNodes) / static_cast<double>(MD->nGpuRhsCalls);
+        rhs_launch_us = (MD->gpuRhsLaunchCpu_s * 1.0e6) / static_cast<double>(MD->nGpuRhsCalls);
+        rhs_graph = (MD->rhs_graph_exec != nullptr) ? 1 : 0;
+    }
+#endif
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s\n\n",
            bench_wall_s,
            bench_cvode_s,
            bench_io_s,
-           bench_forcing_s);
+           bench_forcing_s,
+           rhs_calls,
+           rhs_kernels,
+           rhs_launch_us,
+           rhs_graph,
+           cudaGraphModeName(global_cuda_graph_mode));
 
     MD->modelSummary(1);
     /* Free memory */

@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <chrono>
 #include <iostream>
 //#include "f_element.hpp"
 //#include "f_River.hpp"
@@ -296,6 +297,11 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->modelSummary(0);
     MD->debugData(fout->outpath);
     MD->gc.write(fout->Calib_bak);
+
+    const auto bench_wall_start = std::chrono::steady_clock::now();
+    double bench_forcing_s = 0.0;
+    double bench_cvode_s = 0.0;
+    double bench_io_s = 0.0;
 //    f(t, udata, du, MD); /* Initialized the status */
     const bool etSubstepEnabled =
         (MD->CS.ETStep > ZERO && MD->CS.ETStep + ZERO < MD->CS.SolverStep);
@@ -305,7 +311,11 @@ double SHUD(FileIn *fin, FileOut *fout){
         printDY(MD->file_debug);
 #endif
         flag = MD->ScreenPrint(t, i);
-        MD->PrintInit(fout->Init_update, t);
+        {
+            const auto io_start = std::chrono::steady_clock::now();
+            MD->PrintInit(fout->Init_update, t);
+            bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
+        }
         /* inner loops to next output points with ET step size control */
         tnext += MD->CS.SolverStep;
         while (t + ZERO < tnext) {
@@ -314,6 +324,7 @@ double SHUD(FileIn *fin, FileOut *fout){
                 tout = min(t + MD->CS.ETStep, tnext);
             }
 
+            const auto forcing_start = std::chrono::steady_clock::now();
             MD->updateAllTimeSeries(t);
             MD->updateBC(t);
             MD->updateforcing(t);
@@ -324,6 +335,7 @@ double SHUD(FileIn *fin, FileOut *fout){
                 MD->gpuUpdateForcing();
             }
 #endif
+            bench_forcing_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - forcing_start).count();
             if (dummy_mode) {
                 t = tout; /* dummy mode only. */
             } else {
@@ -331,21 +343,33 @@ double SHUD(FileIn *fin, FileOut *fout){
                     flag = CVodeSetStopTime(mem, tout);
                     check_flag(&flag, "CVodeSetStopTime", 1);
                 }
+                const auto cvode_start = std::chrono::steady_clock::now();
                 flag = CVode(mem, tout, udata, &t, CV_NORMAL);
+                bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode_start).count();
                 check_flag(&flag, "CVode", 1);
             }
         }
         //            CVODEstatus(mem, udata, t);
 #ifdef _CUDA_ON
+        const auto io_sync_start = std::chrono::steady_clock::now();
         MD->gpuSyncStateFromDevice(udata);
         MD->gpuSyncDiagnosticsFromDevice(udata);
+        bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_sync_start).count();
 #endif
-        MD->summary(udata);
-        MD->CS.ExportResults(t);
-        MD->flood->FloodWarning(t);
+        {
+            const auto io_start = std::chrono::steady_clock::now();
+            MD->summary(udata);
+            MD->CS.ExportResults(t);
+            MD->flood->FloodWarning(t);
+            bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
+        }
     }
     MD->ScreenPrint(t, MD->CS.NumSteps);
-    MD->PrintInit(fout->Init_update, t);
+    {
+        const auto io_start = std::chrono::steady_clock::now();
+        MD->PrintInit(fout->Init_update, t);
+        bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
+    }
 
     {
         long int nfe = -1;
@@ -387,6 +411,14 @@ double SHUD(FileIn *fin, FileOut *fout){
 
         printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld\n\n", nfe, nli, nni, netf, npe, nps);
     }
+
+    const double bench_wall_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - bench_wall_start).count();
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f\n\n",
+           bench_wall_s,
+           bench_cvode_s,
+           bench_io_s,
+           bench_forcing_s);
 
     MD->modelSummary(1);
     /* Free memory */
@@ -526,6 +558,11 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     MD->modelSummary(0);
     MD->debugData(fout->outpath);
     MD->gc.write(fout->Calib_bak);
+
+    const auto bench_wall_start = std::chrono::steady_clock::now();
+    double bench_forcing_s = 0.0;
+    double bench_cvode_s = 0.0;
+    double bench_io_s = 0.0;
     
 //    FILE *fp1, *fp2, *fp3, *fp4;
 //    fp1=fopen("y1.txt", "w");
@@ -546,10 +583,12 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 
             dt = tout - t;
             t0 = t;
+            const auto forcing_start = std::chrono::steady_clock::now();
             MD->updateAllTimeSeries(t);
             MD->updateforcing(t);
             /* calculate Interception Storage */
             MD->ET(t, tout);
+            bench_forcing_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - forcing_start).count();
             
             t = t0;
             MD->t0 = t0;
@@ -559,7 +598,9 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
                 flag = CVodeSetStopTime(mem1, tout);
                 check_flag(&flag, "CVodeSetStopTime", 1);
             }
+            const auto cvode1_start = std::chrono::steady_clock::now();
             flag = CVode(mem1, tout, u1, &t, CV_NORMAL);
+            bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode1_start).count();
             check_flag(&flag, "CVode1 SURF", 1);
             
             t = t0;
@@ -568,7 +609,9 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
                 flag = CVodeSetStopTime(mem2, tout);
                 check_flag(&flag, "CVodeSetStopTime", 1);
             }
+            const auto cvode2_start = std::chrono::steady_clock::now();
             flag = CVode(mem2, tout, u2, &t, CV_NORMAL);
+            bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode2_start).count();
             check_flag(&flag, "CVode2 UNSAT", 1);
             
             t = t0;
@@ -577,7 +620,9 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
                 flag = CVodeSetStopTime(mem3, tout);
                 check_flag(&flag, "CVodeSetStopTime", 1);
             }
+            const auto cvode3_start = std::chrono::steady_clock::now();
             flag = CVode(mem3, tout, u3, &t, CV_NORMAL);
+            bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode3_start).count();
             check_flag(&flag, "CVode3 GW", 1);
             
             t = t0;
@@ -586,7 +631,9 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
                 flag = CVodeSetStopTime(mem4, tout);
                 check_flag(&flag, "CVodeSetStopTime", 1);
             }
+            const auto cvode4_start = std::chrono::steady_clock::now();
             flag = CVode(mem4, tout, u4, &t, CV_NORMAL);
+            bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode4_start).count();
             check_flag(&flag, "CVode4 RIV", 1);
             
             if(lakeon && N5 > 0){
@@ -596,24 +643,38 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
                     flag = CVodeSetStopTime(mem5, tout);
                     check_flag(&flag, "CVodeSetStopTime", 1);
                 }
+                const auto cvode5_start = std::chrono::steady_clock::now();
                 flag = CVode(mem5, tout, u5, &t, CV_NORMAL);
+                bench_cvode_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - cvode5_start).count();
                 check_flag(&flag, "CVode5 LAKE", 1);
             }
         }
-        MD->summary(u1, u2, u3, u4, u5);
-        MD->CS.ExportResults(t);
-        flag = MD->ScreenPrintu(t, i);
-        MD->PrintInit(fout->Init_update, t);
+        {
+            const auto io_start = std::chrono::steady_clock::now();
+            MD->summary(u1, u2, u3, u4, u5);
+            MD->CS.ExportResults(t);
+            flag = MD->ScreenPrintu(t, i);
+            MD->PrintInit(fout->Init_update, t);
+            MD->flood->FloodWarning(t);
+            bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
+        }
 //        printVector(fp1, globalY, 0, N1, t);
 //        printVector(fp2, globalY, N1, N2, t);
 //        printVector(fp3, globalY, N1*2, N3, t);
 //        printVector(fp4, globalY, N1*3, N4, t);
-        MD->flood->FloodWarning(t);
     }
 //    fclose(fp1);
 //    fclose(fp2);
 //    fclose(fp3);
 //    fclose(fp4);
+    const double bench_wall_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - bench_wall_start).count();
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f\n\n",
+           bench_wall_s,
+           bench_cvode_s,
+           bench_io_s,
+           bench_forcing_s);
+
     MD->modelSummary(1);
     /* Free memory */
     N_VDestroy(u1);

@@ -47,6 +47,7 @@ int global_backend = BACKEND_OMP;
 int global_backend = BACKEND_CPU;
 #endif
 int global_precond_enabled = 1; /* Whether to use CVODE preconditioning (CUDA backend only). */
+int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
@@ -172,6 +173,61 @@ double SHUD(FileIn *fin, FileOut *fout){
     MD->CheckInputData();
     fout->updateFilePath();
     NY = MD->NumY;
+
+    {
+        /* Backend auto-selection for small problems (avoid slow CUDA path on tiny NY).
+         *
+         * Default behavior:
+         * - If this binary defaults to CUDA (global_backend==BACKEND_CUDA) and the user did not
+         *   explicitly pass --backend, auto-selection is enabled unless SHUD_BACKEND_AUTO disables it.
+         *
+         * Controls:
+         * - Env: SHUD_BACKEND_AUTO=0/1 (also accepts true/false/on/off/yes/no)
+         * - Env: NY_GPU_MIN=<positive int> (default 100000)
+         * - Override: --backend cuda (forces CUDA even when auto-selection would choose CPU/OMP)
+         */
+        bool auto_enabled = false;
+        const char *auto_env = getenv("SHUD_BACKEND_AUTO");
+        int auto_env_value = 0;
+        if (auto_env != NULL && parseBoolEnvValue(auto_env, &auto_env_value)) {
+            auto_enabled = (auto_env_value != 0);
+        } else {
+            auto_enabled = (global_backend == BACKEND_CUDA && !global_backend_cli_set);
+        }
+
+        if (auto_enabled && global_backend == BACKEND_CUDA && !global_backend_cli_set) {
+            const int ny_gpu_min = parsePositiveIntEnv("NY_GPU_MIN", 100000);
+            if (NY > 0 && NY < ny_gpu_min) {
+                int fallback_backend = BACKEND_CPU;
+#ifdef _OPENMP_ON
+                fallback_backend = BACKEND_OMP;
+#endif
+                global_backend = fallback_backend;
+                {
+                    char msg[MAXLEN];
+                    snprintf(msg,
+                             sizeof(msg),
+                             "Backend auto-select: NY=%d < NY_GPU_MIN=%d, switching to %s (override with --backend cuda)\n",
+                             NY,
+                             ny_gpu_min,
+                             (fallback_backend == BACKEND_OMP) ? "omp" : "cpu");
+                    screeninfo(msg);
+                }
+            } else {
+                {
+                    char msg[MAXLEN];
+                    snprintf(msg,
+                             sizeof(msg),
+                             "Backend auto-select: NY=%d >= NY_GPU_MIN=%d, using cuda\n",
+                             NY,
+                             ny_gpu_min);
+                    screeninfo(msg);
+                }
+            }
+        } else if (auto_enabled && global_backend_cli_set) {
+            screeninfo("Backend auto-select: enabled but skipped (explicit --backend provided)\n");
+        }
+    }
 
     const int nthreads = max(MD->CS.num_threads, 1);
     switch (global_backend) {

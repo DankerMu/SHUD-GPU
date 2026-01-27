@@ -22,6 +22,10 @@ void CommandIn::SHUD_help(const char *prog){
     printf (" -n Number of threads to run with OpenMP. \n");
     printf (" --backend Runtime backend selection: cpu, omp, cuda.\n");
     printf ("          Default depends on binary: shud→cpu, shud_omp→omp, shud_cuda→cuda.\n");
+    printf ("          Auto-selection (default ON when binary defaults to cuda):\n");
+    printf ("            Env SHUD_BACKEND_AUTO=0/1 enables/disables.\n");
+    printf ("            Env NY_GPU_MIN sets CUDA threshold (default 100000).\n");
+    printf ("            Override auto-selection with --backend cuda.\n");
     printf (" --precond Enable CVODE preconditioner (CUDA backend only; default ON for --backend cuda).\n");
     printf (" --no-precond Disable CVODE preconditioner.\n");
     printf ("          Env override: SHUD_CUDA_PRECOND=0 disables, =1 enables (default 1).\n");
@@ -33,6 +37,7 @@ void CommandIn::parse(int argc, char **argv){
         SHUD_help(argv[0]);
         myexit(ERRSUCCESS);
     }
+    global_backend_cli_set = 0;
 
     static struct option long_options[] = {
         {"backend", required_argument, NULL, 1},
@@ -95,6 +100,7 @@ void CommandIn::parse(int argc, char **argv){
                 myexit(ERRSUCCESS);
                 break;
             case 1:
+                global_backend_cli_set = 1;
                 if (strcmp(optarg, "cpu") == 0) {
                     global_backend = BACKEND_CPU;
                 } else if (strcmp(optarg, "omp") == 0) {

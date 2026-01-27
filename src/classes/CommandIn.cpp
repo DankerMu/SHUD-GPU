@@ -8,9 +8,96 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <string.h>
+
+static char *ltrim(char *s)
+{
+    if (s == NULL) {
+        return NULL;
+    }
+    while (*s != '\0' && isspace(static_cast<unsigned char>(*s))) {
+        s++;
+    }
+    return s;
+}
+
+static void rtrim(char *s)
+{
+    if (s == NULL) {
+        return;
+    }
+    size_t n = strlen(s);
+    while (n > 0 && isspace(static_cast<unsigned char>(s[n - 1]))) {
+        s[n - 1] = '\0';
+        n--;
+    }
+}
+
+static bool streq_ci(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    while (*a != '\0' && *b != '\0') {
+        const unsigned char ca = static_cast<unsigned char>(*a);
+        const unsigned char cb = static_cast<unsigned char>(*b);
+        if (tolower(ca) != tolower(cb)) {
+            return false;
+        }
+        a++;
+        b++;
+    }
+    return (*a == '\0' && *b == '\0');
+}
+
+static bool parseOutputGroupsArg(const char *arg, int *out_mask)
+{
+    if (arg == NULL || out_mask == NULL) {
+        return false;
+    }
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", arg);
+    char *p = ltrim(buf);
+    rtrim(p);
+    if (*p == '\0') {
+        return false;
+    }
+
+    if (streq_ci(p, "all") || streq_ci(p, "full")) {
+        *out_mask = OUTPUT_GROUP_ALL;
+        return true;
+    }
+    if (streq_ci(p, "off") || streq_ci(p, "none")) {
+        *out_mask = 0;
+        return true;
+    }
+
+    int mask = 0;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(p, ",", &saveptr); tok != NULL; tok = strtok_r(NULL, ",", &saveptr)) {
+        char *t = ltrim(tok);
+        rtrim(t);
+        if (*t == '\0') {
+            continue;
+        }
+        if (streq_ci(t, "state")) {
+            mask |= OUTPUT_GROUP_STATE;
+        } else if (streq_ci(t, "flux")) {
+            mask |= OUTPUT_GROUP_FLUX;
+        } else if (streq_ci(t, "diag") || streq_ci(t, "diagnostic")) {
+            mask |= OUTPUT_GROUP_DIAG;
+        } else {
+            return false;
+        }
+    }
+    *out_mask = mask;
+    return true;
+}
+
 void CommandIn::SHUD_help(const char *prog){
     printf ("\n\nUsage:\n");
-    printf ("%s [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond|--precond-auto] [--help] <project_name>\n\n", prog);
+    printf ("%s [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond|--precond-auto] [--io <groups>] [--help] <project_name>\n\n", prog);
     printf (" -0 Dummy simulation. Load input and write output, but no calculation.\n");
     printf (" -f fflush for each time interval. fflush export data frequently, but slow down performance on cluster.\n");
     printf (" -g Sequential coupled Surface-Unsaturated-Saturated-River mode.\n");
@@ -31,6 +118,8 @@ void CommandIn::SHUD_help(const char *prog){
     printf (" --precond-auto Auto-select CVODE preconditioner (CUDA backend only).\n");
     printf ("          Env override: SHUD_CUDA_PRECOND=0/1/auto (default 1).\n");
     printf ("          Auto threshold: NY_CUDA_PRECOND_MIN (default 100000).\n");
+    printf (" --io Output groups: all|full|off|none|state,flux,diag\n");
+    printf ("          Examples: --io off, --io state, --io state,flux\n");
     printf (" --help Print this message and exit.\n");
 }
 
@@ -46,6 +135,7 @@ void CommandIn::parse(int argc, char **argv){
         {"precond", no_argument, NULL, 2},
         {"no-precond", no_argument, NULL, 3},
         {"precond-auto", no_argument, NULL, 4},
+        {"io", required_argument, NULL, 5},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -126,6 +216,17 @@ void CommandIn::parse(int argc, char **argv){
             case 4:
                 global_precond_mode = PRECOND_MODE_AUTO;
                 break;
+            case 5: {
+                int mask = OUTPUT_GROUP_ALL;
+                if (!parseOutputGroupsArg(optarg, &mask)) {
+                    fprintf(stderr,
+                            "ERROR: invalid --io '%s' (expect all|full|off|none|state,flux,diag)\n",
+                            optarg);
+                    myexit(-1);
+                }
+                global_output_groups = mask;
+                break;
+            }
             case '?':
                 if (optopt == 'C') {
                     fprintf(stderr, "ERROR: option -%c requires an argument (0=OFF, 1=ON).\n", optopt);

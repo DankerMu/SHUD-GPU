@@ -27,7 +27,7 @@ public:
 private:
     int nriv = 0;;   /* Number of rivers */
     int ntype = 0;  /* Type of rivers */
-    int *itype; /* Index of rivertype for each river*/
+    int *itype = NULL; /* Index of rivertype for each river*/
     double **pstage = NULL; /* Pointers to river stage*/
     double **pflux = NULL; /* Pointers to river flux*/
     
@@ -38,7 +38,7 @@ private:
 //    double *Q_low;  /* */
 //    double *Y_high; /* */
 //    double *Y_low;  /* */
-    FILE *fid;
+    FILE *fid = NULL;
     
 };
 #endif /* FloodAlert_hpp */

@@ -34,8 +34,11 @@ FloodAlert::~FloodAlert(){
 //    delete[]  Q_low;
 //    delete[]  Y_high;
 //    delete[]  Y_low;
-    
-    fclose(fid);
+
+    if (fid != NULL) {
+        fclose(fid);
+        fid = NULL;
+    }
 }
 void FloodAlert::pushRiverType(int index, int type){
     itype[index] = type - 1;
@@ -69,10 +72,16 @@ void FloodAlert::InitFile(const char *fn){
 }
 
 int FloodAlert::FloodWarning(double t){
+    if (fid == NULL) {
+        return 0;
+    }
     return FloodWarning(t, fid);
 }
 inline  int FloodAlert::FloodWarning(double t, FILE *fp){
     /*If there is flood, print warning. return 1 - flood, 0 - no flood*/
+    if (fp == NULL || pstage == NULL || pflux == NULL || para == NULL || itype == NULL) {
+        return 0;
+    }
     int flag = 0;
     for(int i = 0; i < nriv; i++){
         if( *(pstage[i]) > para[ itype[i] ].depth ){
@@ -85,4 +94,3 @@ inline  int FloodAlert::FloodWarning(double t, FILE *fp){
     }
     return flag;
 }
-

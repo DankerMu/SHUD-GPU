@@ -395,7 +395,24 @@ void Control_Data::write(const char *fn){
 void Control_Data::getValue(const char *varname){
     
 }
-Print_Ctrl::Print_Ctrl(){}
+Print_Ctrl::Print_Ctrl(){
+    NumVar = 0;
+    Interval = 0;
+    NumUpdate = 0;
+    StartTime = 0;
+    tau = 1.0;
+    Ascii = 0;
+    Binary = 0;
+    fid_bin = NULL;
+    fid_asc = NULL;
+    PrintVar = NULL;
+    buffer = NULL;
+    icol = NULL;
+    filename[0] = '\0';
+    filea[0] = '\0';
+    fileb[0] = '\0';
+    header[0] = '\0';
+}
 void Print_Ctrl::setHeader(const char *s){
     strcpy(header, s);
 }

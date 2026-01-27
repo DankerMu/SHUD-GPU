@@ -236,6 +236,10 @@ public:
     int rhs_graph_failed = 0;
     std::vector<double> d2h_QeleSurf_flat;
     std::vector<double> d2h_QeleSub_flat;
+    std::vector<double> h2d_ele_yBC;
+    std::vector<double> h2d_ele_QBC;
+    std::vector<double> h2d_riv_yBC;
+    std::vector<double> h2d_riv_qBC;
     std::vector<void *> pinned_host_buffers;
 #endif
 	    

@@ -3,6 +3,7 @@
 #ifdef _CUDA_ON
 
 #include "Model_Data.hpp"
+#include "Macros.hpp"
 
 #include <cuda_runtime.h>
 
@@ -222,6 +223,7 @@ void freeDeviceBuffers(DeviceModel &h)
     cudaFreeIfNotNull(h.riv_CSperem);
     cudaFreeIfNotNull(h.riv_topWidth);
     cudaFreeIfNotNull(h.prec_inv);
+    cudaFreeIfNotNull(h.prec_inv_fp32);
 
     h = DeviceModel{};
 }
@@ -1207,12 +1209,22 @@ void gpuInit(Model_Data *md)
 
     /* ------------------------------ Preconditioner storage ------------------------------ */
     {
-        const size_t prec_count = static_cast<size_t>(h.NumEle) * 9u + static_cast<size_t>(h.NumRiv) +
-                                  static_cast<size_t>(h.NumLake);
-        err = cudaAllocAndUpload(&h.prec_inv, static_cast<const double *>(nullptr), prec_count);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "gpuInit: failed to allocate prec_inv\n");
-            goto fail;
+        if (global_precond_enabled) {
+            const size_t prec_count = static_cast<size_t>(h.NumEle) * 9u + static_cast<size_t>(h.NumRiv) +
+                                      static_cast<size_t>(h.NumLake);
+            if (global_precond_fp32) {
+                err = cudaAllocAndUpload(&h.prec_inv_fp32, static_cast<const float *>(nullptr), prec_count);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "gpuInit: failed to allocate prec_inv_fp32\n");
+                    goto fail;
+                }
+            } else {
+                err = cudaAllocAndUpload(&h.prec_inv, static_cast<const double *>(nullptr), prec_count);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "gpuInit: failed to allocate prec_inv\n");
+                    goto fail;
+                }
+            }
         }
     }
 

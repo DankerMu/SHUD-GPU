@@ -48,6 +48,7 @@ int global_backend = BACKEND_CPU;
 #endif
 int global_precond_mode = PRECOND_MODE_ON; /* Requested CVODE preconditioning mode (CUDA backend only). */
 int global_precond_enabled = 1; /* Resolved CVODE preconditioning enable flag (CUDA backend only). */
+int global_precond_fp32 = 0; /* Whether CUDA preconditioner uses fp32 internal storage/compute (mixed precision). */
 int global_cuda_graph_mode = CUDA_GRAPH_AUTO; /* Requested CUDA Graph capture mode (CUDA backend only). */
 int global_cuda_graph_max_ny = 200000; /* Auto mode threshold: enable graph when NumY <= this value. */
 int global_strict_fp = 0; /* Runtime strict-fp request (CUDA backend only; requires strict build flags for full effect). */
@@ -167,6 +168,55 @@ static const char *precondModeName(int mode)
         default:
             return "unknown";
     }
+}
+
+static const char *precondFpName(int fp32)
+{
+    return fp32 ? "fp32" : "fp64";
+}
+
+static bool parsePrecondFpEnvValue(const char *value, int *out_fp32)
+{
+    if (out_fp32 == NULL || value == NULL) {
+        return false;
+    }
+
+    int tmp = *out_fp32;
+    if (parseBoolEnvValue(value, &tmp)) {
+        *out_fp32 = tmp;
+        return true;
+    }
+
+    const char *start = value;
+    while (*start != '\0' && isspace(static_cast<unsigned char>(*start))) {
+        start++;
+    }
+    if (*start == '\0') {
+        return false;
+    }
+    const char *end = start;
+    while (*end != '\0') {
+        end++;
+    }
+    while (end > start && isspace(static_cast<unsigned char>(end[-1]))) {
+        end--;
+    }
+    const size_t len = static_cast<size_t>(end - start);
+    if (len == 0) {
+        return false;
+    }
+
+    if (iequalsN(start, len, "fp32") || iequalsN(start, len, "float") || iequalsN(start, len, "f32") ||
+        iequalsN(start, len, "single")) {
+        *out_fp32 = 1;
+        return true;
+    }
+    if (iequalsN(start, len, "fp64") || iequalsN(start, len, "double") || iequalsN(start, len, "f64")) {
+        *out_fp32 = 0;
+        return true;
+    }
+
+    return false;
 }
 
 static const char *cudaGraphModeName(int mode)
@@ -392,6 +442,14 @@ double SHUD(FileIn *fin, FileOut *fout){
                 }
                 screeninfo(msg);
             }
+            {
+                char msg[MAXLEN];
+                snprintf(msg,
+                         sizeof(msg),
+                         "CUDA preconditioner fp: %s (env SHUD_CUDA_PRECOND_FP=fp64|fp32)\n",
+                         precondFpName(global_precond_fp32));
+                screeninfo(msg);
+            }
             udata = N_VNew_Cuda(NY, sunctx);
             du = N_VNew_Cuda(NY, sunctx);
             check_flag((void *)udata, "N_VNew_Cuda", 0);
@@ -574,7 +632,7 @@ double SHUD(FileIn *fin, FileOut *fout){
             fprintf(stderr, "WARNING: CVodeGetNumPrecSolves failed with flag=%d (continuing)\n", stats_flag);
         }
 
-        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld precond=%d precond_mode=%s\n\n",
+        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld precond=%d precond_mode=%s precond_fp=%s\n\n",
                nfe,
                nli,
                nni,
@@ -582,7 +640,8 @@ double SHUD(FileIn *fin, FileOut *fout){
                npe,
                nps,
                global_precond_enabled,
-               precondModeName(global_precond_mode));
+               precondModeName(global_precond_mode),
+               precondFpName(global_precond_fp32));
     }
 
     const double bench_wall_s =
@@ -953,6 +1012,22 @@ int SHUD(int argc, char *argv[]){
                         precond_env,
                         global_precond_enabled);
             }
+        }
+    }
+
+    /* CUDA preconditioner internal precision (experimental; CUDA backend only).
+     * - Env: SHUD_CUDA_PRECOND_FP=fp64|fp32 (also accepts double/float, 0/1, on/off)
+     */
+    const char *precond_fp_env = getenv("SHUD_CUDA_PRECOND_FP");
+    if (precond_fp_env != NULL && precond_fp_env[0] != '\0') {
+        int fp32 = global_precond_fp32;
+        if (parsePrecondFpEnvValue(precond_fp_env, &fp32)) {
+            global_precond_fp32 = fp32;
+        } else {
+            fprintf(stderr,
+                    "WARNING: invalid SHUD_CUDA_PRECOND_FP='%s' (expect fp64/fp32, double/float, 0/1); using %s.\n",
+                    precond_fp_env,
+                    precondFpName(global_precond_fp32));
         }
     }
 

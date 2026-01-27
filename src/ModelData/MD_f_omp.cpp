@@ -11,7 +11,7 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
     int isf, ius, igw, i;
 #pragma omp parallel  default(shared) private(i, area, isf, ius, igw) num_threads(CS.num_threads)
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumEle; i++) {
             isf = iSF; ius = iUS; igw = iGW;
             area = Ele[i].area;
@@ -56,7 +56,7 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
             CheckNANi(DY[iGW], i, "DY[iGW] (Model_Data::f_applyDY)");
 #endif
         }// end of for 1:NumEle
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumRiv; i++) {
             if(Riv[i].BC > 0){
                 //            Newmann condition.
@@ -74,7 +74,7 @@ void Model_Data::f_applyDY_omp(double *DY, double t){
 #endif
         } // end of for 1:NumRiv
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumLake; i++) {
             DY[iLAKE] = qLakePrcp[i] - qLakeEvap[i]  +
                         (QLakeRivIn[i] - QLakeRivOut[i] + QLakeSub[i] + QLakeSurf[i] ) / y2LakeArea[i] ;
@@ -90,7 +90,7 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
     tnow = t;
 #pragma omp parallel  default(shared) private(i) num_threads(CS.num_threads)
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumEle; i++) {
             if(lakeon && Ele[i].iLake > 0){
                 /* Lake elements */
@@ -112,7 +112,7 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
                 fun_Ele_Recharge(i, t); // step 3 calculate the recharge.
             }
         }
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumEle; i++) {
             if(lakeon && Ele[i].iLake > 0){
                 /* Lake elements */
@@ -123,12 +123,12 @@ void Model_Data:: f_loop_omp( double  *Y, double  *DY, double t){
                 fun_Ele_sub(i, t);
             }
         } //end of for loop.
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumSegmt; i++) {
             fun_Seg_surface( RivSeg[i].iEle-1, RivSeg[i].iRiv-1, i);
             fun_Seg_sub( RivSeg[i].iEle-1, RivSeg[i].iRiv-1, i);
         }
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumRiv; i++) {
             Flux_RiverDown(t, i);
         }
@@ -186,12 +186,12 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
 
 #pragma omp parallel  default(shared) private(i) num_threads(CS.num_threads)
     {
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumY; i++) {
             DY[i] = 0.;
         }
         
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumEle; i++) {
             uYsf[i] = CLAMP_POLICY ? ((Y[iSF] >= 0.) ? Y[iSF] : 0.) : Y[iSF];
             uYus[i] = CLAMP_POLICY ? ((Y[iUS] >= 0.) ? Y[iUS] : 0.) : Y[iUS];
@@ -225,7 +225,7 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
             //        Ele[i].Avg_Sf = sqpow2(Ele[i].dhBYdx, Ele[i].dhBYdy);
         }//end of for j=1:NumEle
         
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumRiv; i++ ){
             uYriv[i] = CLAMP_POLICY ? ((Y[iRIV] >= 0.) ? Y[iRIV] : 0.) : Y[iRIV];
             /* qrivsurf and qrivsub are calculated in Element fluxes.
@@ -238,7 +238,7 @@ void Model_Data::f_update_omp(double  *Y, double *DY, double t){
             }
         }
 
-#pragma omp for
+#pragma omp for schedule(static)
         for (i = 0; i < NumLake; i++) {
             yLakeStg[i] = CLAMP_POLICY ? max(0.0, Y[iLAKE]) : Y[iLAKE];
             lake[i].yStage = yLakeStg[i];

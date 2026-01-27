@@ -145,6 +145,23 @@ static int parsePositiveIntEnv(const char *name, int fallback)
     return static_cast<int>(v);
 }
 
+static void maybePrintOmpAffinityHint()
+{
+#ifdef _OPENMP_ON
+    static bool printed = false;
+    if (printed) {
+        return;
+    }
+    printed = true;
+
+    const char *bind = getenv("OMP_PROC_BIND");
+    const char *places = getenv("OMP_PLACES");
+    if ((bind == NULL || bind[0] == '\0') || (places == NULL || places[0] == '\0')) {
+        screeninfo("TIP: For better OpenMP performance, consider setting OMP_PROC_BIND=spread and OMP_PLACES=cores.\n");
+    }
+#endif
+}
+
 double SHUD(FileIn *fin, FileOut *fout){
     double ret = 0.;
     Model_Data  *MD;        /* Model Data                */
@@ -245,19 +262,16 @@ double SHUD(FileIn *fin, FileOut *fout){
 #ifdef _OPENMP_ON
         {
             /*
-             * Reproducibility note:
-             * SUNDIALS NVECTOR_OPENMP parallel reductions (dot products, norms, etc.)
-             * can introduce small run-to-run floating-point differences due to
-             * non-associative summation order. These differences can cascade through
-             * the adaptive solver and make outputs non-bitwise-reproducible.
+             * SUNDIALS NVECTOR_OPENMP math reductions (dot products, norms, etc.)
+             * can be threaded independently from the OpenMP-parallel RHS loops.
              *
-             * The hydrologic flux kernels below are parallelized explicitly with
-             * OpenMP (num_threads=CS.num_threads). To prioritize deterministic
-             * results, keep NVECTOR_OPENMP math reductions single-threaded by
-             * default. Override via env var SHUD_NVEC_THREADS.
+             * For performance, default NVECTOR threads to match `-n` (RHS threads).
+             * To prioritize deterministic-ish runs, override via env var:
+             *   SHUD_NVEC_THREADS=1
              */
-            const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", 1);
+            const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", nthreads);
             omp_set_num_threads(nthreads);
+            maybePrintOmpAffinityHint();
             {
                 char msg[MAXLEN];
                 snprintf(msg,
@@ -527,7 +541,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     N5 = MD->NumLake;
 
     const int nthreads = max(MD->CS.num_threads, 1);
-    const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", 1);
+    const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", nthreads);
 
     if (global_backend == BACKEND_CUDA) {
         fprintf(stderr,
@@ -539,6 +553,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     if (global_backend == BACKEND_OMP) {
 #ifdef _OPENMP_ON
         omp_set_num_threads(nthreads);
+        maybePrintOmpAffinityHint();
         {
             char msg[MAXLEN];
             snprintf(msg,

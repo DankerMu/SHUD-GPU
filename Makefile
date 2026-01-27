@@ -81,6 +81,15 @@ ifeq ($(DEBUG_GPU_VERIFY),1)
   CFLAGS += -DDEBUG_GPU_VERIFY
 endif
 
+# Optional strict floating-point for CUDA build (disables FMA; enforces precise div/sqrt).
+# Enable with:
+#   make shud_cuda STRICT_FP=1
+STRICT_FP ?= 0
+NVCCFLAGS = $(CFLAGS)
+ifeq ($(STRICT_FP),1)
+  NVCCFLAGS += --fmad=false --prec-div=true --prec-sqrt=true -DSHUD_STRICT_FP_BUILD
+endif
+
 SRC    	= ${SRC_DIR}/classes/*.cpp \
 		  ${SRC_DIR}/ModelData/*.cpp \
 		  ${SRC_DIR}/Model/*.cpp \
@@ -178,10 +187,10 @@ shud_omp: ${MAIN_OMP}  $(SRC) $(SRC_H)
 
 shud_cuda: ${MAIN_shud} $(SRC) $(SRC_H) $(CUDA_SRC)
 	@echo '...Compiling shud_CUDA (NVECTOR_CUDA) ...'
-	@echo $(NVCC) $(CFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
+	@echo $(NVCC) $(NVCCFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
 	@echo
 	@echo
-	$(NVCC) $(CFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
+	$(NVCC) $(NVCCFLAGS) ${STCFLAG} $(CUDA_GENCODE) -D_CUDA_ON ${INCLUDES} -I ${INC_CUDA} ${LIBRARIES} -L ${LIB_CUDA} ${RPATH_CUDA} -o ${TARGET_CUDA} ${MAIN_shud} $(SRC) $(CUDA_SRC) $(LK_CUDA)
 	@echo
 	@echo " ${TARGET_CUDA} is compiled successfully!"
 	@echo

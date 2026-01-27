@@ -170,6 +170,10 @@ extern int global_cuda_graph_mode;
 /* Auto mode: enable graph when NumY <= global_cuda_graph_max_ny. */
 extern int global_cuda_graph_max_ny;
 
+/* Strict FP / deterministic reduction toggles (CUDA backend only). */
+extern int global_strict_fp;
+extern int global_deterministic_reduce;
+
 enum Backend { BACKEND_CPU = 0, BACKEND_OMP = 1, BACKEND_CUDA = 2 };
 extern int global_backend;
 /* Whether --backend was explicitly set by CLI. */

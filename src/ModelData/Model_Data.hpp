@@ -232,6 +232,8 @@ public:
     const void *rhs_graph_dY = nullptr;
     void *rhs_graph_dYdot = nullptr;
     int rhs_graph_clamp_policy = 0;
+    int rhs_graph_deterministic_reduce = 0;
+    int rhs_graph_strict_fp = 0;
     unsigned int rhs_graph_kernel_nodes = 0;
     int rhs_graph_failed = 0;
     std::vector<double> d2h_QeleSurf_flat;

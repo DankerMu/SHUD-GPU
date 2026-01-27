@@ -1064,13 +1064,107 @@ __global__ void k_river_down_and_up(const DeviceModel *m)
     }
 }
 
-__global__ void k_lake_toparea_and_scale(const DeviceModel *m)
+__global__ void k_finalize_rhs(realtype *dYdot, const DeviceModel *m)
 {
-    if (m == nullptr || m->NumLake <= 0) {
+    if (dYdot == nullptr || m == nullptr) {
         return;
     }
 
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m->NumLake; i += blockDim.x * gridDim.x) {
+    const int nEle = m->NumEle;
+    const int nRiv = m->NumRiv;
+    const int nLake = m->NumLake;
+    const int base_riv = 3 * nEle;
+    const int base_lake = base_riv + nRiv;
+
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < nEle; i += blockDim.x * gridDim.x) {
+        const double area = (m->ele_area != nullptr) ? m->ele_area[i] : 1.0;
+        const double inv_area = (area != 0.0) ? (1.0 / area) : 0.0;
+
+        double QeleSurfTot = (m->Qe2r_Surf != nullptr) ? m->Qe2r_Surf[i] : 0.0;
+        double QeleSubTot = (m->Qe2r_Sub != nullptr) ? m->Qe2r_Sub[i] : 0.0;
+        if (m->QeleSurf != nullptr) {
+            const int base = i * 3;
+            QeleSurfTot += m->QeleSurf[base + 0] + m->QeleSurf[base + 1] + m->QeleSurf[base + 2];
+        }
+        if (m->QeleSub != nullptr) {
+            const int base = i * 3;
+            QeleSubTot += m->QeleSub[base + 0] + m->QeleSub[base + 1] + m->QeleSub[base + 2];
+        }
+
+        const double qNet = (m->qEleNetPrep != nullptr) ? m->qEleNetPrep[i] : 0.0;
+        const double qInfil = (m->qEleInfil != nullptr) ? m->qEleInfil[i] : 0.0;
+        const double qExfil = (m->qEleExfil != nullptr) ? m->qEleExfil[i] : 0.0;
+        const double qRecharge = (m->qEleRecharge != nullptr) ? m->qEleRecharge[i] : 0.0;
+        const double qEs = (m->qEs != nullptr) ? m->qEs[i] : 0.0;
+        const double qEu = (m->qEu != nullptr) ? m->qEu[i] : 0.0;
+        const double qEg = (m->qEg != nullptr) ? m->qEg[i] : 0.0;
+        const double qTu = (m->qTu != nullptr) ? m->qTu[i] : 0.0;
+        const double qTg = (m->qTg != nullptr) ? m->qTg[i] : 0.0;
+
+        double DYsf = qNet - qInfil + qExfil - QeleSurfTot * inv_area - qEs;
+        double DYus = qInfil - qRecharge - qEu - qTu;
+        double DYgw = qRecharge - qExfil - QeleSubTot * inv_area - qEg - qTg;
+
+        const int bc = (m->ele_iBC != nullptr) ? m->ele_iBC[i] : 0;
+        if (bc > 0) {
+            DYgw = 0.0;
+        } else if (bc < 0) {
+            const double qbc = (m->ele_QBC != nullptr) ? m->ele_QBC[i] : 0.0;
+            DYgw += qbc * inv_area;
+        }
+
+        const int ss = (m->ele_iSS != nullptr) ? m->ele_iSS[i] : 0;
+        if (ss > 0) {
+            const double qss = (m->ele_QSS != nullptr) ? m->ele_QSS[i] : 0.0;
+            DYsf += qss * inv_area;
+        } else if (ss < 0) {
+            const double qss = (m->ele_QSS != nullptr) ? m->ele_QSS[i] : 0.0;
+            DYgw += qss * inv_area;
+        }
+
+        const double Sy = (m->ele_Sy != nullptr) ? m->ele_Sy[i] : 1.0;
+        if (Sy != 0.0) {
+            DYus /= Sy;
+            DYgw /= Sy;
+        }
+
+        if ((m->ele_iLake != nullptr) && (m->ele_iLake[i] > 0)) {
+            DYsf = 0.0;
+            DYus = 0.0;
+            DYgw = 0.0;
+        }
+
+        dYdot[i] = static_cast<realtype>(DYsf);
+        dYdot[i + nEle] = static_cast<realtype>(DYus);
+        dYdot[i + 2 * nEle] = static_cast<realtype>(DYgw);
+    }
+
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < nRiv; i += blockDim.x * gridDim.x) {
+        const int bc = (m->riv_BC != nullptr) ? m->riv_BC[i] : 0;
+        if (bc > 0) {
+            dYdot[base_riv + i] = static_cast<realtype>(0.0);
+            continue;
+        }
+
+        const double Qup = (m->QrivUp != nullptr) ? m->QrivUp[i] : 0.0;
+        const double Qsurf = (m->QrivSurf != nullptr) ? m->QrivSurf[i] : 0.0;
+        const double Qsub = (m->QrivSub != nullptr) ? m->QrivSub[i] : 0.0;
+        const double Qdown = (m->QrivDown != nullptr) ? m->QrivDown[i] : 0.0;
+        const double qBC = (m->riv_qBC != nullptr) ? m->riv_qBC[i] : 0.0;
+        const double L = (m->riv_Length != nullptr) ? m->riv_Length[i] : 1.0;
+        double dA = (-Qup - Qsurf - Qsub - Qdown + qBC) / L;
+
+        const double CSarea = (m->riv_CSarea != nullptr) ? m->riv_CSarea[i] : 0.0;
+        if (dA < -1.0 * CSarea) {
+            dA = -1.0 * CSarea;
+        }
+        const double topWidth = (m->riv_topWidth != nullptr) ? m->riv_topWidth[i] : 0.0;
+        const double bankSlope = (m->riv_BankSlope != nullptr) ? m->riv_BankSlope[i] : 0.0;
+        const double dy = fun_dAtodY(dA, topWidth, bankSlope);
+        dYdot[base_riv + i] = static_cast<realtype>(dy);
+    }
+
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < nLake; i += blockDim.x * gridDim.x) {
         const double yStage = (m->uYlake != nullptr) ? m->uYlake[i] : 0.0;
         const double zmin = (m->lake_zmin != nullptr) ? m->lake_zmin[i] : 0.0;
         const double area = lake_toparea(m, i, yStage + zmin);
@@ -1085,88 +1179,18 @@ __global__ void k_lake_toparea_and_scale(const DeviceModel *m)
             evap = d_max(0.0, evap);
             m->qLakeEvap[i] = evap;
         }
-    }
-}
 
-__global__ void k_apply_dy_element(realtype *dYdot, const DeviceModel *m)
-{
-    if (dYdot == nullptr || m == nullptr || m->NumEle <= 0) {
-        return;
-    }
-
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m->NumEle; i += blockDim.x * gridDim.x) {
-        const double area = m->ele_area[i];
-        const double QeleSurfTot = m->Qe2r_Surf[i] + m->QeleSurf[i * 3 + 0] + m->QeleSurf[i * 3 + 1] + m->QeleSurf[i * 3 + 2];
-        const double QeleSubTot = m->Qe2r_Sub[i] + m->QeleSub[i * 3 + 0] + m->QeleSub[i * 3 + 1] + m->QeleSub[i * 3 + 2];
-
-        double DYsf = m->qEleNetPrep[i] - m->qEleInfil[i] + m->qEleExfil[i] - QeleSurfTot / area - m->qEs[i];
-        double DYus = m->qEleInfil[i] - m->qEleRecharge[i] - m->qEu[i] - m->qTu[i];
-        double DYgw = m->qEleRecharge[i] - m->qEleExfil[i] - QeleSubTot / area - m->qEg[i] - m->qTg[i];
-
-        const int bc = (m->ele_iBC != nullptr) ? m->ele_iBC[i] : 0;
-        if (bc > 0) {
-            DYgw = 0.0;
-        } else if (bc < 0) {
-            DYgw += m->ele_QBC[i] / area;
+        double dy = 0.0;
+        if (area != 0.0) {
+            const double prcp = (m->qLakePrcp != nullptr) ? m->qLakePrcp[i] : 0.0;
+            const double evap = (m->qLakeEvap != nullptr) ? m->qLakeEvap[i] : 0.0;
+            const double Qin = (m->QLakeRivIn != nullptr) ? m->QLakeRivIn[i] : 0.0;
+            const double Qout = (m->QLakeRivOut != nullptr) ? m->QLakeRivOut[i] : 0.0;
+            const double Qsub = (m->QLakeSub != nullptr) ? m->QLakeSub[i] : 0.0;
+            const double Qsurf = (m->QLakeSurf != nullptr) ? m->QLakeSurf[i] : 0.0;
+            dy = prcp - evap + (Qin - Qout + Qsub + Qsurf) / area;
         }
-
-        const int ss = (m->ele_iSS != nullptr) ? m->ele_iSS[i] : 0;
-        if (ss > 0) {
-            DYsf += m->ele_QSS[i] / area;
-        } else if (ss < 0) {
-            DYgw += m->ele_QSS[i] / area;
-        }
-
-        const double Sy = m->ele_Sy[i];
-        DYus /= Sy;
-        DYgw /= Sy;
-
-        if ((m->ele_iLake != nullptr) && (m->ele_iLake[i] > 0)) {
-            DYsf = 0.0;
-            DYus = 0.0;
-            DYgw = 0.0;
-        }
-
-        dYdot[i] = static_cast<realtype>(DYsf);
-        dYdot[i + m->NumEle] = static_cast<realtype>(DYus);
-        dYdot[i + 2 * m->NumEle] = static_cast<realtype>(DYgw);
-    }
-}
-
-__global__ void k_apply_dy_river(realtype *dYdot, const DeviceModel *m)
-{
-    if (dYdot == nullptr || m == nullptr || m->NumRiv <= 0) {
-        return;
-    }
-
-    const int base = 3 * m->NumEle;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m->NumRiv; i += blockDim.x * gridDim.x) {
-        const int bc = (m->riv_BC != nullptr) ? m->riv_BC[i] : 0;
-        if (bc > 0) {
-            dYdot[base + i] = static_cast<realtype>(0.0);
-            continue;
-        }
-        double dA = (-m->QrivUp[i] - m->QrivSurf[i] - m->QrivSub[i] - m->QrivDown[i] + m->riv_qBC[i]) / m->riv_Length[i];
-        const double CSarea = (m->riv_CSarea != nullptr) ? m->riv_CSarea[i] : 0.0;
-        if (dA < -1.0 * CSarea) {
-            dA = -1.0 * CSarea;
-        }
-        const double dy = fun_dAtodY(dA, (m->riv_topWidth != nullptr) ? m->riv_topWidth[i] : 0.0, m->riv_BankSlope[i]);
-        dYdot[base + i] = static_cast<realtype>(dy);
-    }
-}
-
-__global__ void k_apply_dy_lake(realtype *dYdot, const DeviceModel *m)
-{
-    if (dYdot == nullptr || m == nullptr || m->NumLake <= 0) {
-        return;
-    }
-
-    const int base = 3 * m->NumEle + m->NumRiv;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m->NumLake; i += blockDim.x * gridDim.x) {
-        const double area = m->y2LakeArea[i];
-        const double dy = m->qLakePrcp[i] - m->qLakeEvap[i] + (m->QLakeRivIn[i] - m->QLakeRivOut[i] + m->QLakeSub[i] + m->QLakeSurf[i]) / area;
-        dYdot[base + i] = static_cast<realtype>(dy);
+        dYdot[base_lake + i] = static_cast<realtype>(dy);
     }
 }
 
@@ -1177,7 +1201,8 @@ void launch_rhs_kernels(realtype t,
                         realtype *dYdot,
                         const DeviceModel *d_model,
                         const DeviceModel *h_model,
-                        cudaStream_t stream
+                        cudaStream_t stream,
+                        RhsLaunchStats *stats
 #ifdef DEBUG_GPU_VERIFY
                         ,
                         const GpuVerifyContext *verify
@@ -1195,6 +1220,7 @@ void launch_rhs_kernels(realtype t,
     const int nLake = h_model->NumLake;
     const int nY = 3 * nEle + nRiv + nLake;
 
+    unsigned int kernel_nodes = 0;
     const int clamp_policy = CLAMP_POLICY;
     constexpr int kBlockSize = 256;
     const auto cap_blocks = [](int blocks) { return (blocks > 65535) ? 65535 : blocks; };
@@ -1207,6 +1233,7 @@ void launch_rhs_kernels(realtype t,
         if (nLake > maxN) maxN = nLake;
         if (maxN > 0) {
             const int blocks = cap_blocks((maxN + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_zero_flux_accumulators<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
     }
@@ -1216,6 +1243,7 @@ void launch_rhs_kernels(realtype t,
         /* 1) apply BC + sanitize */
         if (nY > 0) {
             const int blocks = cap_blocks((nY + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_apply_bc_and_sanitize_state<<<blocks, kBlockSize, 0, stream>>>(dY, d_model, clamp_policy);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1253,6 +1281,7 @@ void launch_rhs_kernels(realtype t,
         /* 2) element local */
         if (nEle > 0) {
             const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_ele_local<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1317,6 +1346,7 @@ void launch_rhs_kernels(realtype t,
         if (nEle > 0) {
             const int nEdge = nEle * 3;
             const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_ele_edge_surface<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1343,6 +1373,7 @@ void launch_rhs_kernels(realtype t,
         if (nEle > 0) {
             const int nEdge = nEle * 3;
             const int blocks = cap_blocks((nEdge + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_ele_edge_sub<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1368,6 +1399,7 @@ void launch_rhs_kernels(realtype t,
         /* 5) segment exchange */
         if (nSeg > 0) {
             const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_seg_exchange<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1401,6 +1433,7 @@ void launch_rhs_kernels(realtype t,
         /* 6) river down + up */
         if (nRiv > 0) {
             const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
             k_river_down_and_up<<<blocks, kBlockSize, 0, stream>>>(d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1440,96 +1473,50 @@ void launch_rhs_kernels(realtype t,
     }
 
     {
-        shud_nvtx::scoped_range stage_range("RHS/7_lake_toparea");
-        /* 7) lake toparea + evap cap */
-        if (nLake > 0) {
-            const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
-            k_lake_toparea_and_scale<<<blocks, kBlockSize, 0, stream>>>(d_model);
+        shud_nvtx::scoped_range stage_range("RHS/7_finalize");
+        int maxN = nEle;
+        if (nRiv > maxN) maxN = nRiv;
+        if (nLake > maxN) maxN = nLake;
+        if (maxN > 0) {
+            const int blocks = cap_blocks((maxN + kBlockSize - 1) / kBlockSize);
+            kernel_nodes++;
+            k_finalize_rhs<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
         }
 #ifdef DEBUG_GPU_VERIFY
         if (shouldVerify(verify) && !g_gpu_verify_halted) {
             std::vector<double> h_y2LakeArea, h_qLakeEvap;
+            std::vector<realtype> h_dYdot_ele, h_dYdot_riv, h_dYdot_lake;
             bool ok = true;
             ok &= queueD2H(h_y2LakeArea, h_model->y2LakeArea, static_cast<size_t>(nLake), stream, "y2LakeArea");
             ok &= queueD2H(h_qLakeEvap, h_model->qLakeEvap, static_cast<size_t>(nLake), stream, "qLakeEvap");
+            ok &= queueD2H(h_dYdot_ele, dYdot, static_cast<size_t>(3 * nEle), stream, "dYdot(ele)");
+            ok &= queueD2H(h_dYdot_riv, dYdot + static_cast<size_t>(3 * nEle), static_cast<size_t>(nRiv), stream, "dYdot(riv)");
+            ok &= queueD2H(h_dYdot_lake, dYdot + static_cast<size_t>(3 * nEle + nRiv), static_cast<size_t>(nLake), stream, "dYdot(lake)");
             ok &= syncVerifyStream(stream);
             if (ok) {
                 const auto &ctx = *verify;
-                (void)compareAndReport("k_lake_toparea_and_scale", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake, 0);
+                (void)compareAndReport("k_finalize_rhs", "y2LakeArea", ctx, ctx.cpu_y2LakeArea, h_y2LakeArea.data(), h_y2LakeArea.size(), IndexHintKind::Lake, 0);
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_lake_toparea_and_scale", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake, 0);
+                    (void)compareAndReport("k_finalize_rhs", "qLakeEvap", ctx, ctx.cpu_qLakeEvap, h_qLakeEvap.data(), h_qLakeEvap.size(), IndexHintKind::Lake, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    (void)compareAndReport("k_finalize_rhs", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot, 0);
+                }
+                if (!g_gpu_verify_halted) {
+                    const size_t offset = static_cast<size_t>(3 * nEle);
+                    (void)compareAndReport("k_finalize_rhs", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot, offset);
+                }
+                if (!g_gpu_verify_halted) {
+                    const size_t offset = static_cast<size_t>(3 * nEle + nRiv);
+                    (void)compareAndReport("k_finalize_rhs", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot, offset);
                 }
             }
         }
 #endif
     }
 
-    {
-        shud_nvtx::scoped_range stage_range("RHS/8_apply_dy_element");
-        /* 8) apply DY element */
-        if (nEle > 0) {
-            const int blocks = cap_blocks((nEle + kBlockSize - 1) / kBlockSize);
-            k_apply_dy_element<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-        }
-#ifdef DEBUG_GPU_VERIFY
-        if (shouldVerify(verify) && !g_gpu_verify_halted) {
-            const size_t count = static_cast<size_t>(3 * nEle);
-            std::vector<realtype> h_dYdot_ele;
-            bool ok = true;
-            ok &= queueD2H(h_dYdot_ele, dYdot, count, stream, "dYdot(ele)");
-            ok &= syncVerifyStream(stream);
-            if (ok) {
-                const auto &ctx = *verify;
-                (void)compareAndReport("k_apply_dy_element", "dYdot", ctx, ctx.cpu_dYdot, h_dYdot_ele.data(), h_dYdot_ele.size(), IndexHintKind::DYdot, 0);
-            }
-        }
-#endif
-    }
-
-    {
-        shud_nvtx::scoped_range stage_range("RHS/9_apply_dy_river");
-        /* 9) apply DY river */
-        if (nRiv > 0) {
-            const int blocks = cap_blocks((nRiv + kBlockSize - 1) / kBlockSize);
-            k_apply_dy_river<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-        }
-#ifdef DEBUG_GPU_VERIFY
-        if (shouldVerify(verify) && !g_gpu_verify_halted) {
-            const size_t offset = static_cast<size_t>(3 * nEle);
-            const size_t count = static_cast<size_t>(nRiv);
-            std::vector<realtype> h_dYdot_riv;
-            bool ok = true;
-            ok &= queueD2H(h_dYdot_riv, dYdot + offset, count, stream, "dYdot(riv)");
-            ok &= syncVerifyStream(stream);
-            if (ok) {
-                const auto &ctx = *verify;
-                (void)compareAndReport("k_apply_dy_river", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_riv.data(), h_dYdot_riv.size(), IndexHintKind::DYdot, offset);
-            }
-        }
-#endif
-    }
-
-    {
-        shud_nvtx::scoped_range stage_range("RHS/10_apply_dy_lake");
-        /* 10) apply DY lake */
-        if (nLake > 0) {
-            const int blocks = cap_blocks((nLake + kBlockSize - 1) / kBlockSize);
-            k_apply_dy_lake<<<blocks, kBlockSize, 0, stream>>>(dYdot, d_model);
-        }
-#ifdef DEBUG_GPU_VERIFY
-        if (shouldVerify(verify) && !g_gpu_verify_halted) {
-            const size_t offset = static_cast<size_t>(3 * nEle + nRiv);
-            const size_t count = static_cast<size_t>(nLake);
-            std::vector<realtype> h_dYdot_lake;
-            bool ok = true;
-            ok &= queueD2H(h_dYdot_lake, dYdot + offset, count, stream, "dYdot(lake)");
-            ok &= syncVerifyStream(stream);
-            if (ok) {
-                const auto &ctx = *verify;
-                (void)compareAndReport("k_apply_dy_lake", "dYdot", ctx, ctx.cpu_dYdot + offset, h_dYdot_lake.data(), h_dYdot_lake.size(), IndexHintKind::DYdot, offset);
-            }
-        }
-#endif
+    if (stats != nullptr) {
+        stats->kernel_nodes = kernel_nodes;
     }
 }
 

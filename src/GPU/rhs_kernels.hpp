@@ -8,6 +8,12 @@
 
 struct DeviceModel;
 
+#ifdef __cplusplus
+struct RhsLaunchStats {
+    unsigned int kernel_nodes = 0;
+};
+#endif
+
 #ifdef DEBUG_GPU_VERIFY
 struct GpuVerifyContext;
 #endif
@@ -17,7 +23,8 @@ void launch_rhs_kernels(realtype t,
                         realtype *dYdot,
                         const DeviceModel *d_model,
                         const DeviceModel *h_model,
-                        cudaStream_t stream
+                        cudaStream_t stream,
+                        RhsLaunchStats *stats
 #ifdef DEBUG_GPU_VERIFY
                         ,
                         const GpuVerifyContext *verify

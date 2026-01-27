@@ -223,6 +223,17 @@ public:
     unsigned long nForcingStep = 0;
     unsigned long nGpuForcingCopy = 0;
     unsigned long nGpuPrecSetup = 0;
+    unsigned long nGpuRhsCalls = 0;
+    unsigned long nGpuRhsKernelNodes = 0;
+    unsigned long nGpuRhsLaunchCalls = 0;
+    double gpuRhsLaunchCpu_s = 0.0;
+    cudaGraph_t rhs_graph = nullptr;
+    cudaGraphExec_t rhs_graph_exec = nullptr;
+    const void *rhs_graph_dY = nullptr;
+    void *rhs_graph_dYdot = nullptr;
+    int rhs_graph_clamp_policy = 0;
+    unsigned int rhs_graph_kernel_nodes = 0;
+    int rhs_graph_failed = 0;
     std::vector<double> d2h_QeleSurf_flat;
     std::vector<double> d2h_QeleSub_flat;
     std::vector<void *> pinned_host_buffers;

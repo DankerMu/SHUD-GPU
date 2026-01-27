@@ -34,6 +34,7 @@ Notes:
   - Parses stdout for:
       CVODE_STATS  nfe=... nli=... nni=... netf=... npe=... nps=...
       BENCH_STATS  wall_s=... cvode_s=... io_s=... forcing_s=...
+                  rhs_calls=... rhs_kernels=... rhs_launch_us=... rhs_graph=...
 EOF
 }
 
@@ -183,7 +184,14 @@ run_one() {
   bench_io="$(extract_kv io_s "${bench_stats_line}")"
   bench_forcing="$(extract_kv forcing_s "${bench_stats_line}")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  local rhs_calls rhs_kernels rhs_launch_us rhs_graph cuda_graph_mode
+  rhs_calls="$(extract_kv rhs_calls "${bench_stats_line}")"
+  rhs_kernels="$(extract_kv rhs_kernels "${bench_stats_line}")"
+  rhs_launch_us="$(extract_kv rhs_launch_us "${bench_stats_line}")"
+  rhs_graph="$(extract_kv rhs_graph "${bench_stats_line}")"
+  cuda_graph_mode="$(extract_kv cuda_graph_mode "${bench_stats_line}")"
+
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "${backend}" \
     "${run_idx}" \
     "${wall_s}" \
@@ -191,6 +199,11 @@ run_one() {
     "${bench_cvode}" \
     "${bench_io}" \
     "${bench_forcing}" \
+    "${rhs_calls}" \
+    "${rhs_kernels}" \
+    "${rhs_launch_us}" \
+    "${rhs_graph}" \
+    "${cuda_graph_mode}" \
     "${nfe}" \
     "${nli}" \
     "${nni}" \
@@ -213,7 +226,7 @@ mkdir -p "${OUT_DIR}/${PROJECT}"
 BENCH_LOG="${OUT_DIR}/${PROJECT}/bench.log"
 SUMMARY_MD="${OUT_DIR}/${PROJECT}/bench_summary.md"
 
-printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
+printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\trhs_calls\trhs_kernels\trhs_launch_us\trhs_graph\tcuda_graph_mode\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
 
 for backend in "${BACKENDS[@]}"; do
   bin=""
@@ -279,11 +292,15 @@ with open(out_md, "w", encoding="utf-8") as f:
     cvode = [to_float(r["cvode_s"]) for r in rs]
     io = [to_float(r["io_s"]) for r in rs]
     forcing = [to_float(r["forcing_s"]) for r in rs]
+    rhs_kernels = [to_float(r.get("rhs_kernels")) for r in rs]
+    rhs_launch_us = [to_float(r.get("rhs_launch_us")) for r in rs]
 
     wall_m, wall_s = mean_std(wall)
     cvode_m, cvode_s = mean_std(cvode)
     io_m, io_s = mean_std(io)
     forcing_m, forcing_s = mean_std(forcing)
+    rhs_kernels_m, rhs_kernels_s = mean_std(rhs_kernels)
+    rhs_launch_us_m, rhs_launch_us_s = mean_std(rhs_launch_us)
 
     f.write(f"## {backend}\\n\\n")
     f.write("| metric | mean (s) | stdev (s) |\\n")
@@ -296,6 +313,10 @@ with open(out_md, "w", encoding="utf-8") as f:
       f.write(f"| io | {io_m:.3f} | {io_s:.3f} |\\n")
     if forcing_m is not None:
       f.write(f"| forcing | {forcing_m:.3f} | {forcing_s:.3f} |\\n")
+    if rhs_kernels_m is not None:
+      f.write(f"| rhs kernels/call | {rhs_kernels_m:.3f} | {rhs_kernels_s:.3f} |\\n")
+    if rhs_launch_us_m is not None:
+      f.write(f"| rhs launch (us/call) | {rhs_launch_us_m:.3f} | {rhs_launch_us_s:.3f} |\\n")
 
     # CVODE stats: show last run's values for quick reference
     last = rs[-1]

@@ -50,6 +50,8 @@ int global_precond_mode = PRECOND_MODE_ON; /* Requested CVODE preconditioning mo
 int global_precond_enabled = 1; /* Resolved CVODE preconditioning enable flag (CUDA backend only). */
 int global_cuda_graph_mode = CUDA_GRAPH_AUTO; /* Requested CUDA Graph capture mode (CUDA backend only). */
 int global_cuda_graph_max_ny = 200000; /* Auto mode threshold: enable graph when NumY <= this value. */
+int global_strict_fp = 0; /* Runtime strict-fp request (CUDA backend only; requires strict build flags for full effect). */
+int global_deterministic_reduce = 1; /* Whether to use deterministic reductions in key CUDA kernels. */
 int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
 int global_output_groups = OUTPUT_GROUP_ALL; /* Runtime output group selection (OutputGroupMask bitmask). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
@@ -597,7 +599,7 @@ double SHUD(FileIn *fin, FileOut *fout){
         rhs_graph = (MD->rhs_graph_exec != nullptr) ? 1 : 0;
     }
 #endif
-    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s\n\n",
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s strict_fp=%d det_reduce=%d\n\n",
            bench_wall_s,
            bench_cvode_s,
            bench_io_s,
@@ -606,7 +608,9 @@ double SHUD(FileIn *fin, FileOut *fout){
            rhs_kernels,
            rhs_launch_us,
            rhs_graph,
-           cudaGraphModeName(global_cuda_graph_mode));
+           cudaGraphModeName(global_cuda_graph_mode),
+           global_strict_fp,
+           global_deterministic_reduce);
 
     MD->modelSummary(1);
     /* Free memory */
@@ -877,7 +881,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
         rhs_graph = (MD->rhs_graph_exec != nullptr) ? 1 : 0;
     }
 #endif
-    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s\n\n",
+    printf("\nBENCH_STATS wall_s=%.6f cvode_s=%.6f io_s=%.6f forcing_s=%.6f rhs_calls=%lu rhs_kernels=%.3f rhs_launch_us=%.3f rhs_graph=%d cuda_graph_mode=%s strict_fp=%d det_reduce=%d\n\n",
            bench_wall_s,
            bench_cvode_s,
            bench_io_s,
@@ -886,7 +890,9 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
            rhs_kernels,
            rhs_launch_us,
            rhs_graph,
-           cudaGraphModeName(global_cuda_graph_mode));
+           cudaGraphModeName(global_cuda_graph_mode),
+           global_strict_fp,
+           global_deterministic_reduce);
 
     MD->modelSummary(1);
     /* Free memory */
@@ -972,6 +978,40 @@ int SHUD(int argc, char *argv[]){
     }
     global_cuda_graph_max_ny = parsePositiveIntEnv("NY_CUDA_GRAPH_MAX", global_cuda_graph_max_ny);
 
+    /* Strict FP / deterministic reduction toggles (CUDA backend only).
+     * - Env: SHUD_STRICT_FP=0/1 (also accepts true/false/on/off/yes/no)
+     * - Env: SHUD_DETERMINISTIC_REDUCE=0/1 (also accepts true/false/on/off/yes/no)
+     */
+    const char *strict_fp_env = getenv("SHUD_STRICT_FP");
+    if (strict_fp_env != NULL && strict_fp_env[0] != '\0') {
+        int enabled = global_strict_fp;
+        if (parseBoolEnvValue(strict_fp_env, &enabled)) {
+            global_strict_fp = enabled;
+        } else {
+            fprintf(stderr,
+                    "WARNING: invalid SHUD_STRICT_FP='%s' (expect 0/1, on/off, true/false); using %d.\n",
+                    strict_fp_env,
+                    global_strict_fp);
+        }
+    }
+
+    const char *det_reduce_env = getenv("SHUD_DETERMINISTIC_REDUCE");
+    if (det_reduce_env != NULL && det_reduce_env[0] != '\0') {
+        int enabled = global_deterministic_reduce;
+        if (parseBoolEnvValue(det_reduce_env, &enabled)) {
+            global_deterministic_reduce = enabled;
+        } else {
+            fprintf(stderr,
+                    "WARNING: invalid SHUD_DETERMINISTIC_REDUCE='%s' (expect 0/1, on/off, true/false); using %d.\n",
+                    det_reduce_env,
+                    global_deterministic_reduce);
+        }
+    }
+
+    if (global_strict_fp) {
+        global_deterministic_reduce = 1;
+    }
+
     CLI.parse(argc, argv);
     CLI.setFileIO(fin, fout);
 
@@ -984,6 +1024,14 @@ int SHUD(int argc, char *argv[]){
 #ifndef _CUDA_ON
         fprintf(stderr, "\nERROR: --backend cuda requested, but this build does not enable CUDA (NVECTOR_CUDA).\n\n");
         myexit(-1);
+#endif
+    }
+
+    if (global_backend == BACKEND_CUDA && global_strict_fp) {
+#if !defined(SHUD_STRICT_FP_BUILD)
+        fprintf(stderr,
+                "WARNING: SHUD_STRICT_FP=1 requested, but this build was not compiled with STRICT_FP=1; "
+                "for full strict-fp (disable FMA), rebuild shud_cuda with: make shud_cuda STRICT_FP=1\n");
 #endif
     }
 

@@ -298,6 +298,8 @@ void gpuInit(Model_Data *md)
     md->rhs_graph_failed = 0;
     md->rhs_graph_kernel_nodes = 0;
     md->rhs_graph_clamp_policy = 0;
+    md->rhs_graph_deterministic_reduce = 0;
+    md->rhs_graph_strict_fp = 0;
     md->rhs_graph_dY = nullptr;
     md->rhs_graph_dYdot = nullptr;
     if (md->rhs_graph_exec != nullptr) {
@@ -1373,6 +1375,8 @@ void gpuFree(Model_Data *md)
     }
     md->rhs_graph_dY = nullptr;
     md->rhs_graph_dYdot = nullptr;
+    md->rhs_graph_deterministic_reduce = 0;
+    md->rhs_graph_strict_fp = 0;
     md->rhs_graph_kernel_nodes = 0;
     md->rhs_graph_failed = 0;
 

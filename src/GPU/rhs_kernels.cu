@@ -954,6 +954,55 @@ __global__ void k_ele_edge_sub(const DeviceModel *m)
     }
 }
 
+__global__ void k_seg_exchange_atomic(const DeviceModel *m)
+{
+    if (m == nullptr || m->NumSeg <= 0) {
+        return;
+    }
+
+    for (int seg = blockIdx.x * blockDim.x + threadIdx.x; seg < m->NumSeg; seg += blockDim.x * gridDim.x) {
+        const int iEle = (m->seg_iEle != nullptr) ? (m->seg_iEle[seg] - 1) : -1;
+        const int iRiv = (m->seg_iRiv != nullptr) ? (m->seg_iRiv[seg] - 1) : -1;
+        if (iEle < 0 || iEle >= m->NumEle || iRiv < 0 || iRiv >= m->NumRiv) {
+            continue;
+        }
+
+        /* Surface exchange */
+        double isf = (m->uYsf != nullptr) ? m->uYsf[iEle] : 0.0;
+        const double qi = (m->qEleInfil != nullptr) ? m->qEleInfil[iEle] : 0.0;
+        const double qex = (m->qEleExfil != nullptr) ? m->qEleExfil[iEle] : 0.0;
+        isf = d_max(0.0, isf - qi + qex);
+        const double QsegSurf = weirFlow_jtoi(m->ele_z_surf[iEle],
+                                              isf,
+                                              m->ele_z_surf[iEle] - m->riv_depth[iRiv],
+                                              m->uYriv[iRiv],
+                                              m->ele_z_surf[iEle] + m->riv_zbank[iRiv],
+                                              m->seg_Cwr[seg],
+                                              m->seg_length[seg],
+                                              m->ele_depression[iEle]);
+
+        if (m->QrivSurf != nullptr) atomicAdd(&m->QrivSurf[iRiv], QsegSurf);
+        if (m->Qe2r_Surf != nullptr) atomicAdd(&m->Qe2r_Surf[iEle], -QsegSurf);
+
+        /* Subsurface exchange */
+        const double QsegSub_raw = flux_R2E_GW(m->uYriv[iRiv],
+                                               m->ele_z_surf[iEle] - m->riv_depth[iRiv],
+                                               m->uYgw[iEle],
+                                               m->ele_z_bottom[iEle],
+                                               m->ele_effKH[iEle],
+                                               m->riv_KsatH[iRiv],
+                                               m->seg_length[seg],
+                                               m->riv_BedThick[iRiv]);
+        double QsegSub = QsegSub_raw;
+        if (m->fu_Sub != nullptr) {
+            QsegSub *= m->fu_Sub[iEle];
+        }
+
+        if (m->QrivSub != nullptr) atomicAdd(&m->QrivSub[iRiv], QsegSub);
+        if (m->Qe2r_Sub != nullptr) atomicAdd(&m->Qe2r_Sub[iEle], -QsegSub);
+    }
+}
+
 __global__ void k_seg_exchange_compute(const DeviceModel *m)
 {
     if (m == nullptr || m->NumSeg <= 0) {
@@ -1474,13 +1523,18 @@ void launch_rhs_kernels(realtype t,
         /* 5) segment exchange */
         if (nSeg > 0) {
             const int blocks = cap_blocks((nSeg + kBlockSize - 1) / kBlockSize);
-            kernel_nodes++;
-            k_seg_exchange_compute<<<blocks, kBlockSize, 0, stream>>>(d_model);
-            const int total = nRiv + nEle;
-            if (total > 0) {
-                const int reduce_blocks = cap_blocks(total);
+            if (global_deterministic_reduce) {
                 kernel_nodes++;
-                k_seg_reduce<<<reduce_blocks, kBlockSize, 0, stream>>>(d_model);
+                k_seg_exchange_compute<<<blocks, kBlockSize, 0, stream>>>(d_model);
+                const int total = nRiv + nEle;
+                if (total > 0) {
+                    const int reduce_blocks = cap_blocks(total);
+                    kernel_nodes++;
+                    k_seg_reduce<<<reduce_blocks, kBlockSize, 0, stream>>>(d_model);
+                }
+            } else {
+                kernel_nodes++;
+                k_seg_exchange_atomic<<<blocks, kBlockSize, 0, stream>>>(d_model);
             }
         }
 #ifdef DEBUG_GPU_VERIFY
@@ -1494,15 +1548,16 @@ void launch_rhs_kernels(realtype t,
             ok &= syncVerifyStream(stream);
             if (ok) {
                 const auto &ctx = *verify;
-                (void)compareAndReport("k_seg_reduce", "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
+                const char *label = global_deterministic_reduce ? "k_seg_reduce" : "k_seg_exchange_atomic";
+                (void)compareAndReport(label, "QrivSurf", ctx, ctx.cpu_QrivSurf, h_QrivSurf.data(), h_QrivSurf.size(), IndexHintKind::Riv, 0);
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_reduce", "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
+                    (void)compareAndReport(label, "QrivSub", ctx, ctx.cpu_QrivSub, h_QrivSub.data(), h_QrivSub.size(), IndexHintKind::Riv, 0);
                 }
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_reduce", "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
+                    (void)compareAndReport(label, "Qe2r_Surf", ctx, ctx.cpu_Qe2r_Surf, h_Qe2r_Surf.data(), h_Qe2r_Surf.size(), IndexHintKind::Ele, 0);
                 }
                 if (!g_gpu_verify_halted) {
-                    (void)compareAndReport("k_seg_reduce", "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
+                    (void)compareAndReport(label, "Qe2r_Sub", ctx, ctx.cpu_Qe2r_Sub, h_Qe2r_Sub.data(), h_Qe2r_Sub.size(), IndexHintKind::Ele, 0);
                 }
             }
         }

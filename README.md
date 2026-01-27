@@ -127,6 +127,12 @@ make shud_cuda CUDA_GENCODE='-gencode arch=compute_80,code=sm_80'
 
 - `--backend cpu|omp|cuda`: select runtime backend. Each binary has its own default: `shud`→cpu, `shud_omp`→omp, `shud_cuda`→cuda. Use this flag to override.
 - `--precond` / `--no-precond`: enable/disable CVODE preconditioner (CUDA backend only; default ON for `--backend cuda`)
+  - Env override: `SHUD_CUDA_PRECOND=0/1/auto`
+- CUDA perf/consistency knobs (env vars; CUDA backend only):
+  - `SHUD_CUDA_GRAPH=0/1/auto` (+ `NY_CUDA_GRAPH_MAX` for auto threshold)
+  - `SHUD_DETERMINISTIC_REDUCE=0/1`
+  - `SHUD_STRICT_FP=0/1` (for full strict-FP, rebuild with `make shud_cuda STRICT_FP=1`)
+  - Details: `docs/cuda_strict_mode.md`
 
 Examples:
 

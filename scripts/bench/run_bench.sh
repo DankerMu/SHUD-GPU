@@ -190,8 +190,11 @@ run_one() {
   rhs_launch_us="$(extract_kv rhs_launch_us "${bench_stats_line}")"
   rhs_graph="$(extract_kv rhs_graph "${bench_stats_line}")"
   cuda_graph_mode="$(extract_kv cuda_graph_mode "${bench_stats_line}")"
+  local strict_fp det_reduce
+  strict_fp="$(extract_kv strict_fp "${bench_stats_line}")"
+  det_reduce="$(extract_kv det_reduce "${bench_stats_line}")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "${backend}" \
     "${run_idx}" \
     "${wall_s}" \
@@ -204,6 +207,8 @@ run_one() {
     "${rhs_launch_us}" \
     "${rhs_graph}" \
     "${cuda_graph_mode}" \
+    "${strict_fp}" \
+    "${det_reduce}" \
     "${nfe}" \
     "${nli}" \
     "${nni}" \
@@ -226,7 +231,7 @@ mkdir -p "${OUT_DIR}/${PROJECT}"
 BENCH_LOG="${OUT_DIR}/${PROJECT}/bench.log"
 SUMMARY_MD="${OUT_DIR}/${PROJECT}/bench_summary.md"
 
-printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\trhs_calls\trhs_kernels\trhs_launch_us\trhs_graph\tcuda_graph_mode\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
+printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\trhs_calls\trhs_kernels\trhs_launch_us\trhs_graph\tcuda_graph_mode\tstrict_fp\tdet_reduce\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
 
 for backend in "${BACKENDS[@]}"; do
   bin=""

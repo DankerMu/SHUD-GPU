@@ -65,6 +65,8 @@ void destroyRhsGraph(Model_Data *md)
     md->rhs_graph_dY = nullptr;
     md->rhs_graph_dYdot = nullptr;
     md->rhs_graph_clamp_policy = 0;
+    md->rhs_graph_deterministic_reduce = 0;
+    md->rhs_graph_strict_fp = 0;
     md->rhs_graph_kernel_nodes = 0;
 }
 
@@ -127,6 +129,8 @@ bool captureRhsGraph(Model_Data *md, const realtype *dY, realtype *dYdot, cudaSt
     md->rhs_graph_dY = dY;
     md->rhs_graph_dYdot = dYdot;
     md->rhs_graph_clamp_policy = CLAMP_POLICY;
+    md->rhs_graph_deterministic_reduce = global_deterministic_reduce;
+    md->rhs_graph_strict_fp = global_strict_fp;
     md->rhs_graph_kernel_nodes = stats.kernel_nodes;
     return true;
 }
@@ -340,7 +344,9 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
     RhsLaunchStats rhs_stats{};
     bool use_graph = shouldUseCudaGraph(md, verify_ptr);
     if (use_graph && (md->rhs_graph_exec == nullptr || md->rhs_graph_dY != dY || md->rhs_graph_dYdot != dYdot ||
-                      md->rhs_graph_clamp_policy != CLAMP_POLICY)) {
+                      md->rhs_graph_clamp_policy != CLAMP_POLICY ||
+                      md->rhs_graph_deterministic_reduce != global_deterministic_reduce ||
+                      md->rhs_graph_strict_fp != global_strict_fp)) {
         (void)captureRhsGraph(md, dY, dYdot, rhs_stream);
     }
 
@@ -366,7 +372,9 @@ int f_gpu(double t, N_Vector y, N_Vector ydot, void *user_data)
     RhsLaunchStats rhs_stats{};
     bool use_graph = shouldUseCudaGraph(md);
     if (use_graph && (md->rhs_graph_exec == nullptr || md->rhs_graph_dY != dY || md->rhs_graph_dYdot != dYdot ||
-                      md->rhs_graph_clamp_policy != CLAMP_POLICY)) {
+                      md->rhs_graph_clamp_policy != CLAMP_POLICY ||
+                      md->rhs_graph_deterministic_reduce != global_deterministic_reduce ||
+                      md->rhs_graph_strict_fp != global_strict_fp)) {
         (void)captureRhsGraph(md, dY, dYdot, rhs_stream);
     }
 

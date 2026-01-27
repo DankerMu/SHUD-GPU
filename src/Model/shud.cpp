@@ -46,7 +46,8 @@ int global_backend = BACKEND_OMP;
 #else
 int global_backend = BACKEND_CPU;
 #endif
-int global_precond_enabled = 1; /* Whether to use CVODE preconditioning (CUDA backend only). */
+int global_precond_mode = PRECOND_MODE_ON; /* Requested CVODE preconditioning mode (CUDA backend only). */
+int global_precond_enabled = 1; /* Resolved CVODE preconditioning enable flag (CUDA backend only). */
 int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
@@ -119,6 +120,48 @@ static bool parseBoolEnvValue(const char *value, int *out)
     }
 
     return false;
+}
+
+static bool parseAutoEnvValue(const char *value)
+{
+    if (value == NULL) {
+        return false;
+    }
+
+    const char *start = value;
+    while (*start != '\0' && isspace(static_cast<unsigned char>(*start))) {
+        start++;
+    }
+    if (*start == '\0') {
+        return false;
+    }
+    const char *end = start;
+    while (*end != '\0') {
+        end++;
+    }
+    while (end > start && isspace(static_cast<unsigned char>(end[-1]))) {
+        end--;
+    }
+    const size_t len = static_cast<size_t>(end - start);
+    if (len == 0) {
+        return false;
+    }
+
+    return iequalsN(start, len, "auto");
+}
+
+static const char *precondModeName(int mode)
+{
+    switch (mode) {
+        case PRECOND_MODE_OFF:
+            return "off";
+        case PRECOND_MODE_ON:
+            return "on";
+        case PRECOND_MODE_AUTO:
+            return "auto";
+        default:
+            return "unknown";
+    }
 }
 
 static int parsePositiveIntEnv(const char *name, int fallback)
@@ -246,6 +289,18 @@ double SHUD(FileIn *fin, FileOut *fout){
         }
     }
 
+    bool precond_auto_resolved = false;
+    int precond_auto_min_ny = 0;
+    if (global_backend == BACKEND_CUDA) {
+        if (global_precond_mode == PRECOND_MODE_AUTO) {
+            precond_auto_resolved = true;
+            precond_auto_min_ny = parsePositiveIntEnv("NY_CUDA_PRECOND_MIN", 100000);
+            global_precond_enabled = (NY >= precond_auto_min_ny) ? 1 : 0;
+        } else {
+            global_precond_enabled = (global_precond_mode == PRECOND_MODE_ON) ? 1 : 0;
+        }
+    }
+
     const int nthreads = max(MD->CS.num_threads, 1);
     switch (global_backend) {
         case BACKEND_CPU:
@@ -301,10 +356,20 @@ double SHUD(FileIn *fin, FileOut *fout){
             }
             {
                 char msg[MAXLEN];
-                snprintf(msg,
-                         sizeof(msg),
-                         "CUDA preconditioner: %s (env SHUD_CUDA_PRECOND=0 or --no-precond to disable)\n",
-                         global_precond_enabled ? "ON" : "OFF");
+                if (precond_auto_resolved) {
+                    snprintf(msg,
+                             sizeof(msg),
+                             "CUDA preconditioner: auto (NY=%d, NY_CUDA_PRECOND_MIN=%d) -> %s\n",
+                             NY,
+                             precond_auto_min_ny,
+                             global_precond_enabled ? "ON" : "OFF");
+                } else {
+                    snprintf(msg,
+                             sizeof(msg),
+                             "CUDA preconditioner: %s (mode=%s; env SHUD_CUDA_PRECOND=0/1/auto)\n",
+                             global_precond_enabled ? "ON" : "OFF",
+                             precondModeName(global_precond_mode));
+                }
                 screeninfo(msg);
             }
             udata = N_VNew_Cuda(NY, sunctx);
@@ -479,7 +544,15 @@ double SHUD(FileIn *fin, FileOut *fout){
             fprintf(stderr, "WARNING: CVodeGetNumPrecSolves failed with flag=%d (continuing)\n", stats_flag);
         }
 
-        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld\n\n", nfe, nli, nni, netf, npe, nps);
+        printf("\nCVODE_STATS nfe=%ld nli=%ld nni=%ld netf=%ld npe=%ld nps=%ld precond=%d precond_mode=%s\n\n",
+               nfe,
+               nli,
+               nni,
+               netf,
+               npe,
+               nps,
+               global_precond_enabled,
+               precondModeName(global_precond_mode));
     }
 
     const double bench_wall_s =
@@ -787,19 +860,24 @@ int SHUD(int argc, char *argv[]){
     FileOut *fout = new FileOut;
 
     /* CUDA preconditioner toggle (default ON).
-     * - Env: SHUD_CUDA_PRECOND=0/1 (also accepts true/false/on/off/yes/no)
+     * - Env: SHUD_CUDA_PRECOND=0/1/auto (also accepts true/false/on/off/yes/no)
      * - CLI: --precond / --no-precond (overrides env)
      */
     const char *precond_env = getenv("SHUD_CUDA_PRECOND");
     if (precond_env != NULL && precond_env[0] != '\0') {
-        int enabled = global_precond_enabled;
-        if (parseBoolEnvValue(precond_env, &enabled)) {
-            global_precond_enabled = enabled;
+        if (parseAutoEnvValue(precond_env)) {
+            global_precond_mode = PRECOND_MODE_AUTO;
         } else {
-            fprintf(stderr,
-                    "WARNING: invalid SHUD_CUDA_PRECOND='%s' (expect 0/1, on/off, true/false); using %d.\n",
-                    precond_env,
-                    global_precond_enabled);
+            int enabled = global_precond_enabled;
+            if (parseBoolEnvValue(precond_env, &enabled)) {
+                global_precond_mode = enabled ? PRECOND_MODE_ON : PRECOND_MODE_OFF;
+                global_precond_enabled = enabled;
+            } else {
+                fprintf(stderr,
+                        "WARNING: invalid SHUD_CUDA_PRECOND='%s' (expect 0/1/auto, on/off, true/false); using %d.\n",
+                        precond_env,
+                        global_precond_enabled);
+            }
         }
     }
 

@@ -10,7 +10,7 @@
 #include <getopt.h>
 void CommandIn::SHUD_help(const char *prog){
     printf ("\n\nUsage:\n");
-    printf ("%s [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond] [--help] <project_name>\n\n", prog);
+    printf ("%s [-0fgv] [-C ClampPolicy] [-p project_file] [-c Calib_file] [-o output] [-n Num_Threads] [--backend cpu|omp|cuda] [--precond|--no-precond|--precond-auto] [--help] <project_name>\n\n", prog);
     printf (" -0 Dummy simulation. Load input and write output, but no calculation.\n");
     printf (" -f fflush for each time interval. fflush export data frequently, but slow down performance on cluster.\n");
     printf (" -g Sequential coupled Surface-Unsaturated-Saturated-River mode.\n");
@@ -28,7 +28,9 @@ void CommandIn::SHUD_help(const char *prog){
     printf ("            Override auto-selection with --backend cuda.\n");
     printf (" --precond Enable CVODE preconditioner (CUDA backend only; default ON for --backend cuda).\n");
     printf (" --no-precond Disable CVODE preconditioner.\n");
-    printf ("          Env override: SHUD_CUDA_PRECOND=0 disables, =1 enables (default 1).\n");
+    printf (" --precond-auto Auto-select CVODE preconditioner (CUDA backend only).\n");
+    printf ("          Env override: SHUD_CUDA_PRECOND=0/1/auto (default 1).\n");
+    printf ("          Auto threshold: NY_CUDA_PRECOND_MIN (default 100000).\n");
     printf (" --help Print this message and exit.\n");
 }
 
@@ -43,6 +45,7 @@ void CommandIn::parse(int argc, char **argv){
         {"backend", required_argument, NULL, 1},
         {"precond", no_argument, NULL, 2},
         {"no-precond", no_argument, NULL, 3},
+        {"precond-auto", no_argument, NULL, 4},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -113,10 +116,15 @@ void CommandIn::parse(int argc, char **argv){
                 }
                 break;
             case 2:
+                global_precond_mode = PRECOND_MODE_ON;
                 global_precond_enabled = 1;
                 break;
             case 3:
+                global_precond_mode = PRECOND_MODE_OFF;
                 global_precond_enabled = 0;
+                break;
+            case 4:
+                global_precond_mode = PRECOND_MODE_AUTO;
                 break;
             case '?':
                 if (optopt == 'C') {

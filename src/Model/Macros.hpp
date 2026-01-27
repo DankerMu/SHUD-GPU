@@ -158,7 +158,10 @@ extern int global_fflush_mode;
 extern int global_implicit_mode;
 extern int global_verbose_mode;
 extern int lakeon;
-/* Whether to enable CVODE preconditioning (CUDA backend only). */
+enum PrecondMode { PRECOND_MODE_OFF = 0, PRECOND_MODE_ON = 1, PRECOND_MODE_AUTO = 2 };
+/* Requested CVODE preconditioner mode (CUDA backend only). */
+extern int global_precond_mode;
+/* Resolved CVODE preconditioner enable flag (CUDA backend only). */
 extern int global_precond_enabled;
 
 enum Backend { BACKEND_CPU = 0, BACKEND_OMP = 1, BACKEND_CUDA = 2 };

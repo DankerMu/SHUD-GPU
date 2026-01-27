@@ -1248,6 +1248,28 @@ void gpuInit(Model_Data *md)
         const size_t nRiv = static_cast<size_t>(h.NumRiv);
         const size_t nLake = static_cast<size_t>(h.NumLake);
 
+        /* Pin forcing buffers for async H2D copies during ET steps. */
+        if (h.NumEle > 0) {
+            tryHostRegister(md, md->qElePrep, nEle * sizeof(double), "qElePrep");
+            tryHostRegister(md, md->qEleNetPrep, nEle * sizeof(double), "qEleNetPrep");
+            tryHostRegister(md, md->qPotEvap, nEle * sizeof(double), "qPotEvap");
+            tryHostRegister(md, md->qPotTran, nEle * sizeof(double), "qPotTran");
+            tryHostRegister(md, md->qEleE_IC, nEle * sizeof(double), "qEleE_IC");
+            tryHostRegister(md, md->fu_Surf, nEle * sizeof(double), "fu_Surf");
+            tryHostRegister(md, md->fu_Sub, nEle * sizeof(double), "fu_Sub");
+
+            md->h2d_ele_yBC.assign(nEle, 0.0);
+            md->h2d_ele_QBC.assign(nEle, 0.0);
+            tryHostRegister(md, md->h2d_ele_yBC.data(), nEle * sizeof(double), "h2d_ele_yBC");
+            tryHostRegister(md, md->h2d_ele_QBC.data(), nEle * sizeof(double), "h2d_ele_QBC");
+        }
+        if (h.NumRiv > 0) {
+            md->h2d_riv_yBC.assign(nRiv, 0.0);
+            md->h2d_riv_qBC.assign(nRiv, 0.0);
+            tryHostRegister(md, md->h2d_riv_yBC.data(), nRiv * sizeof(double), "h2d_riv_yBC");
+            tryHostRegister(md, md->h2d_riv_qBC.data(), nRiv * sizeof(double), "h2d_riv_qBC");
+        }
+
         if (md->CS.dt_qe_infil > 0) {
             tryHostRegister(md, md->qEleInfil, nEle * sizeof(double), "qEleInfil");
             tryHostRegister(md, md->qEleExfil, nEle * sizeof(double), "qEleExfil");
@@ -1424,6 +1446,11 @@ void Model_Data::gpuUpdateForcing()
     cudaStream_t stream = cuda_stream;
     const size_t bytes = static_cast<size_t>(NumEle) * sizeof(double);
 
+    if (nGpuForcingCopy == 0) {
+        /* t_lai is private; pin it lazily on first use so H2D copies can be truly async. */
+        tryHostRegister(this, t_lai, bytes, "t_lai");
+    }
+
     cudaError_t err = cudaMemcpyAsync(d_qElePrep, qElePrep, bytes, cudaMemcpyHostToDevice, stream);
     cudaDie(err, "gpuUpdateForcing(qElePrep)");
 
@@ -1443,29 +1470,63 @@ void Model_Data::gpuUpdateForcing()
     cudaDie(err, "gpuUpdateForcing(fu_Sub)");
 
     if (d_ele_yBC != nullptr && d_ele_QBC != nullptr) {
-        std::vector<double> h_ele_yBC(static_cast<size_t>(NumEle));
-        std::vector<double> h_ele_QBC(static_cast<size_t>(NumEle));
-        for (int i = 0; i < NumEle; i++) {
-            h_ele_yBC[static_cast<size_t>(i)] = Ele[i].yBC;
-            h_ele_QBC[static_cast<size_t>(i)] = Ele[i].QBC;
+        double *h_ele_yBC = nullptr;
+        double *h_ele_QBC = nullptr;
+        if (h2d_ele_yBC.size() == static_cast<size_t>(NumEle) && h2d_ele_QBC.size() == static_cast<size_t>(NumEle)) {
+            for (int i = 0; i < NumEle; i++) {
+                h2d_ele_yBC[static_cast<size_t>(i)] = Ele[i].yBC;
+                h2d_ele_QBC[static_cast<size_t>(i)] = Ele[i].QBC;
+            }
+            h_ele_yBC = h2d_ele_yBC.data();
+            h_ele_QBC = h2d_ele_QBC.data();
         }
-        err = cudaMemcpyAsync(d_ele_yBC, h_ele_yBC.data(), bytes, cudaMemcpyHostToDevice, stream);
+        std::vector<double> tmp_ele_yBC;
+        std::vector<double> tmp_ele_QBC;
+        if (h_ele_yBC == nullptr || h_ele_QBC == nullptr) {
+            tmp_ele_yBC.resize(static_cast<size_t>(NumEle));
+            tmp_ele_QBC.resize(static_cast<size_t>(NumEle));
+            for (int i = 0; i < NumEle; i++) {
+                tmp_ele_yBC[static_cast<size_t>(i)] = Ele[i].yBC;
+                tmp_ele_QBC[static_cast<size_t>(i)] = Ele[i].QBC;
+            }
+            h_ele_yBC = tmp_ele_yBC.data();
+            h_ele_QBC = tmp_ele_QBC.data();
+        }
+
+        err = cudaMemcpyAsync(d_ele_yBC, h_ele_yBC, bytes, cudaMemcpyHostToDevice, stream);
         cudaDie(err, "gpuUpdateForcing(ele_yBC)");
-        err = cudaMemcpyAsync(d_ele_QBC, h_ele_QBC.data(), bytes, cudaMemcpyHostToDevice, stream);
+        err = cudaMemcpyAsync(d_ele_QBC, h_ele_QBC, bytes, cudaMemcpyHostToDevice, stream);
         cudaDie(err, "gpuUpdateForcing(ele_QBC)");
     }
 
     if (NumRiv > 0 && d_riv_yBC != nullptr && d_riv_qBC != nullptr) {
         const size_t bytes_riv = static_cast<size_t>(NumRiv) * sizeof(double);
-        std::vector<double> h_riv_yBC(static_cast<size_t>(NumRiv));
-        std::vector<double> h_riv_qBC(static_cast<size_t>(NumRiv));
-        for (int i = 0; i < NumRiv; i++) {
-            h_riv_yBC[static_cast<size_t>(i)] = Riv[i].yBC;
-            h_riv_qBC[static_cast<size_t>(i)] = Riv[i].qBC;
+        double *h_riv_yBC = nullptr;
+        double *h_riv_qBC = nullptr;
+        if (h2d_riv_yBC.size() == static_cast<size_t>(NumRiv) && h2d_riv_qBC.size() == static_cast<size_t>(NumRiv)) {
+            for (int i = 0; i < NumRiv; i++) {
+                h2d_riv_yBC[static_cast<size_t>(i)] = Riv[i].yBC;
+                h2d_riv_qBC[static_cast<size_t>(i)] = Riv[i].qBC;
+            }
+            h_riv_yBC = h2d_riv_yBC.data();
+            h_riv_qBC = h2d_riv_qBC.data();
         }
-        err = cudaMemcpyAsync(d_riv_yBC, h_riv_yBC.data(), bytes_riv, cudaMemcpyHostToDevice, stream);
+        std::vector<double> tmp_riv_yBC;
+        std::vector<double> tmp_riv_qBC;
+        if (h_riv_yBC == nullptr || h_riv_qBC == nullptr) {
+            tmp_riv_yBC.resize(static_cast<size_t>(NumRiv));
+            tmp_riv_qBC.resize(static_cast<size_t>(NumRiv));
+            for (int i = 0; i < NumRiv; i++) {
+                tmp_riv_yBC[static_cast<size_t>(i)] = Riv[i].yBC;
+                tmp_riv_qBC[static_cast<size_t>(i)] = Riv[i].qBC;
+            }
+            h_riv_yBC = tmp_riv_yBC.data();
+            h_riv_qBC = tmp_riv_qBC.data();
+        }
+
+        err = cudaMemcpyAsync(d_riv_yBC, h_riv_yBC, bytes_riv, cudaMemcpyHostToDevice, stream);
         cudaDie(err, "gpuUpdateForcing(riv_yBC)");
-        err = cudaMemcpyAsync(d_riv_qBC, h_riv_qBC.data(), bytes_riv, cudaMemcpyHostToDevice, stream);
+        err = cudaMemcpyAsync(d_riv_qBC, h_riv_qBC, bytes_riv, cudaMemcpyHostToDevice, stream);
         cudaDie(err, "gpuUpdateForcing(riv_qBC)");
     }
 

@@ -12,6 +12,8 @@ Options:
                            Backend to run (default: all)
   --repeat <N>             Repeat count per backend (default: 3)
   --out-dir <dir>          Output directory (default: output/bench)
+  --io <groups>            Output groups passed to SHUD (--io)
+                           (default: all)
   --cuda-precond <default|on|off|auto>
                            CUDA CVODE preconditioner mode (default: default)
   --profile <none|nsys|nvprof>
@@ -41,6 +43,7 @@ REPEAT=3
 OUT_DIR="output/bench"
 PROFILE="none"
 CUDA_PRECOND="default"
+IO_GROUPS="all"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --repeat) REPEAT="${2:-}"; shift 2 ;;
     --out-dir|--out) OUT_DIR="${2:-}"; shift 2 ;;
+    --io) IO_GROUPS="${2:-}"; shift 2 ;;
     --cuda-precond) CUDA_PRECOND="${2:-}"; shift 2 ;;
     --profile) PROFILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -75,6 +79,10 @@ case "${CUDA_PRECOND}" in
   default|on|off|auto) ;;
   *) echo "ERROR: invalid --cuda-precond '${CUDA_PRECOND}' (expect default|on|off|auto)" >&2; exit 2 ;;
 esac
+if [[ -z "${IO_GROUPS}" ]]; then
+  echo "ERROR: --io requires a non-empty value" >&2
+  exit 2
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
@@ -112,6 +120,9 @@ run_one() {
   local time_file="${run_dir}/${run_tag}.time"
 
   local cmd=( "${bin}" "${PROJECT}" )
+  if [[ "${IO_GROUPS}" != "all" ]]; then
+    cmd=( "${bin}" "--io" "${IO_GROUPS}" "${PROJECT}" )
+  fi
   local cmd_prefix=()
   local env_prefix=()
   if [[ "${backend}" == "cuda" && "${CUDA_PRECOND}" != "default" ]]; then
@@ -172,7 +183,7 @@ run_one() {
   bench_io="$(extract_kv io_s "${bench_stats_line}")"
   bench_forcing="$(extract_kv forcing_s "${bench_stats_line}")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "${backend}" \
     "${run_idx}" \
     "${wall_s}" \
@@ -186,6 +197,7 @@ run_one() {
     "${netf}" \
     "${npe}" \
     "${nps}" \
+    "${IO_GROUPS}" \
     "${CUDA_PRECOND}" \
     "${log_file}"
 }
@@ -201,7 +213,7 @@ mkdir -p "${OUT_DIR}/${PROJECT}"
 BENCH_LOG="${OUT_DIR}/${PROJECT}/bench.log"
 SUMMARY_MD="${OUT_DIR}/${PROJECT}/bench_summary.md"
 
-printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\tnfe\tnli\tnni\tnetf\tnpe\tnps\tcuda_precond\tlog\n" >"${BENCH_LOG}"
+printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\tnfe\tnli\tnni\tnetf\tnpe\tnps\tio_groups\tcuda_precond\tlog\n" >"${BENCH_LOG}"
 
 for backend in "${BACKENDS[@]}"; do
   bin=""

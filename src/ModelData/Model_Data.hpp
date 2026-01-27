@@ -75,7 +75,9 @@ public:
     int NumMeltF = 0;        /* Number of Melt Factor Time series */
     int NumRivType = 0;        /* Number of River Shape */
     int NumRivNode = 0;
-    int *io_ele, *io_riv, *io_lake; /* Wether Export the data of these elements */
+    int *io_ele = NULL;
+    int *io_riv = NULL;
+    int *io_lake = NULL; /* Whether export the data of these elements */
     
     _TimeSeriesData *tsd_weather;
     _TimeSeriesData tsd_LAI;

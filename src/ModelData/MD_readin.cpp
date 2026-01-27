@@ -785,9 +785,18 @@ void Model_Data::FreeData(){
         delete[] QeleSub[i] ;
     }
     
-    delete[]    io_ele;
-    delete[]    io_riv;
-    delete[]    io_lake;
+    if (io_ele != NULL) {
+        delete[] io_ele;
+        io_ele = NULL;
+    }
+    if (io_riv != NULL) {
+        delete[] io_riv;
+        io_riv = NULL;
+    }
+    if (io_lake != NULL) {
+        delete[] io_lake;
+        io_lake = NULL;
+    }
     
     delete[]    QeleSurf;
     delete[]    QeleSub;

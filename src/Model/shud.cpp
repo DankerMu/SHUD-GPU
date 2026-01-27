@@ -49,6 +49,7 @@ int global_backend = BACKEND_CPU;
 int global_precond_mode = PRECOND_MODE_ON; /* Requested CVODE preconditioning mode (CUDA backend only). */
 int global_precond_enabled = 1; /* Resolved CVODE preconditioning enable flag (CUDA backend only). */
 int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
+int global_output_groups = OUTPUT_GROUP_ALL; /* Runtime output group selection (OutputGroupMask bitmask). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
 int CLAMP_POLICY = 1; /* Whether to clamp state to non-negative values */
 int CLAMP_POLICY_CLI_SET = 0; /* Whether CLAMP_POLICY is overridden by CLI (-C) */
@@ -210,6 +211,7 @@ double SHUD(FileIn *fin, FileOut *fout){
     Model_Data  *MD;        /* Model Data                */
     N_Vector    udata;
     N_Vector    du;
+    const bool out_diag = (global_output_groups & OUTPUT_GROUP_DIAG) != 0;
 
 #ifdef _CUDA_ON
     SUNCudaExecPolicy *nvec_stream_exec_policy = nullptr;
@@ -420,8 +422,10 @@ double SHUD(FileIn *fin, FileOut *fout){
     }
 #endif
     MD->initialize_output();
-    MD->PrintInit(fout->Init_bak, 0);
-    MD->InitFloodAlert(fout->floodout);
+    if (out_diag) {
+        MD->PrintInit(fout->Init_bak, 0);
+        MD->InitFloodAlert(fout->floodout);
+    }
     SetCVODE(mem, f, MD, udata, LS, sunctx);
     /* set start time */
     t = MD->CS.StartTime;
@@ -430,8 +434,10 @@ double SHUD(FileIn *fin, FileOut *fout){
     /* start solver in loops */
 //    getSecond();
     MD->modelSummary(0);
-    MD->debugData(fout->outpath);
-    MD->gc.write(fout->Calib_bak);
+    if (out_diag) {
+        MD->debugData(fout->outpath);
+        MD->gc.write(fout->Calib_bak);
+    }
 
     const auto bench_wall_start = std::chrono::steady_clock::now();
     double bench_forcing_s = 0.0;
@@ -441,12 +447,16 @@ double SHUD(FileIn *fin, FileOut *fout){
     const bool etSubstepEnabled =
         (MD->CS.ETStep > ZERO && MD->CS.ETStep + ZERO < MD->CS.SolverStep);
     for (int i = 0; i < MD->CS.NumSteps && !ierr; i++) {
-        printDY(MD->file_debug);
+        if (out_diag) {
+            printDY(MD->file_debug);
+        }
 #ifdef DEBUG
-        printDY(MD->file_debug);
+        if (out_diag) {
+            printDY(MD->file_debug);
+        }
 #endif
         flag = MD->ScreenPrint(t, i);
-        {
+        if (out_diag) {
             const auto io_start = std::chrono::steady_clock::now();
             MD->PrintInit(fout->Init_update, t);
             bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
@@ -495,12 +505,14 @@ double SHUD(FileIn *fin, FileOut *fout){
             const auto io_start = std::chrono::steady_clock::now();
             MD->summary(udata);
             MD->CS.ExportResults(t);
-            MD->flood->FloodWarning(t);
+            if (out_diag) {
+                MD->flood->FloodWarning(t);
+            }
             bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
         }
     }
     MD->ScreenPrint(t, MD->CS.NumSteps);
-    {
+    if (out_diag) {
         const auto io_start = std::chrono::steady_clock::now();
         MD->PrintInit(fout->Init_update, t);
         bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
@@ -586,6 +598,7 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     Model_Data  *MD;        /* Model Data                */
     N_Vector    u1, u2, u3, u4, u5;
     N_Vector    du1, du2, du3, du4, du5;
+    const bool out_diag = (global_output_groups & OUTPUT_GROUP_DIAG) != 0;
     SUNContext sunctx1, sunctx2, sunctx3, sunctx4, sunctx5;
     ret = SUNContext_Create(NULL, &sunctx1);check_flag(&ret, "SUNContext_Create", 1);
     ret = SUNContext_Create(NULL, &sunctx2);check_flag(&ret, "SUNContext_Create", 1);
@@ -681,8 +694,10 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     MD->LoadIC();
     MD->SetIC2Y(u1, u2, u3, u4, u5);
     MD->initialize_output();
-    MD->PrintInit(fout->Init_bak, 0);
-    MD->InitFloodAlert(fout->floodout);
+    if (out_diag) {
+        MD->PrintInit(fout->Init_bak, 0);
+        MD->InitFloodAlert(fout->floodout);
+    }
     
     SetCVODE(mem1, f_surf,  MD, u1, LS1, sunctx1);
     SetCVODE(mem2, f_unsat, MD, u2, LS2, sunctx2);
@@ -700,8 +715,10 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     /* start solver in loops */
 //    getSecond();
     MD->modelSummary(0);
-    MD->debugData(fout->outpath);
-    MD->gc.write(fout->Calib_bak);
+    if (out_diag) {
+        MD->debugData(fout->outpath);
+        MD->gc.write(fout->Calib_bak);
+    }
 
     const auto bench_wall_start = std::chrono::steady_clock::now();
     double bench_forcing_s = 0.0;
@@ -798,8 +815,10 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
             MD->summary(u1, u2, u3, u4, u5);
             MD->CS.ExportResults(t);
             flag = MD->ScreenPrintu(t, i);
-            MD->PrintInit(fout->Init_update, t);
-            MD->flood->FloodWarning(t);
+            if (out_diag) {
+                MD->PrintInit(fout->Init_update, t);
+                MD->flood->FloodWarning(t);
+            }
             bench_io_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - io_start).count();
         }
 //        printVector(fp1, globalY, 0, N1, t);

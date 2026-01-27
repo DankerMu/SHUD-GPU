@@ -12,6 +12,8 @@ Options:
                            Backend to run (default: all)
   --repeat <N>             Repeat count per backend (default: 3)
   --out-dir <dir>          Output directory (default: output/bench)
+  --cuda-precond <default|on|off|auto>
+                           CUDA CVODE preconditioner mode (default: default)
   --profile <none|nsys|nvprof>
                            Profiling mode (CUDA only; default: none)
   -h, --help               Show this help
@@ -38,6 +40,7 @@ BACKEND="all"
 REPEAT=3
 OUT_DIR="output/bench"
 PROFILE="none"
+CUDA_PRECOND="default"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --repeat) REPEAT="${2:-}"; shift 2 ;;
     --out-dir|--out) OUT_DIR="${2:-}"; shift 2 ;;
+    --cuda-precond) CUDA_PRECOND="${2:-}"; shift 2 ;;
     --profile) PROFILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown arg: $1" >&2; usage; exit 2 ;;
@@ -66,6 +70,10 @@ esac
 case "${PROFILE}" in
   none|nsys|nvprof) ;;
   *) echo "ERROR: invalid --profile '${PROFILE}' (expect none|nsys|nvprof)" >&2; exit 2 ;;
+esac
+case "${CUDA_PRECOND}" in
+  default|on|off|auto) ;;
+  *) echo "ERROR: invalid --cuda-precond '${CUDA_PRECOND}' (expect default|on|off|auto)" >&2; exit 2 ;;
 esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -105,6 +113,14 @@ run_one() {
 
   local cmd=( "${bin}" "${PROJECT}" )
   local cmd_prefix=()
+  local env_prefix=()
+  if [[ "${backend}" == "cuda" && "${CUDA_PRECOND}" != "default" ]]; then
+    case "${CUDA_PRECOND}" in
+      on) env_prefix=( SHUD_CUDA_PRECOND=1 ) ;;
+      off) env_prefix=( SHUD_CUDA_PRECOND=0 ) ;;
+      auto) env_prefix=( SHUD_CUDA_PRECOND=auto ) ;;
+    esac
+  fi
   if [[ "${backend}" == "cuda" && "${PROFILE}" != "none" ]]; then
     case "${PROFILE}" in
       nsys)
@@ -126,7 +142,7 @@ run_one() {
 
   echo "[run] backend=${backend} ${run_tag}: ${cmd_prefix[*]:-} ${cmd[*]}"
   : >"${log_file}"
-  if /usr/bin/time -f "%e" -o "${time_file}" "${cmd_prefix[@]}" "${cmd[@]}" >>"${log_file}" 2>&1; then
+  if /usr/bin/time -f "%e" -o "${time_file}" env "${env_prefix[@]}" "${cmd_prefix[@]}" "${cmd[@]}" >>"${log_file}" 2>&1; then
     :
   else
     local rc=$?
@@ -156,7 +172,7 @@ run_one() {
   bench_io="$(extract_kv io_s "${bench_stats_line}")"
   bench_forcing="$(extract_kv forcing_s "${bench_stats_line}")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "${backend}" \
     "${run_idx}" \
     "${wall_s}" \
@@ -170,6 +186,7 @@ run_one() {
     "${netf}" \
     "${npe}" \
     "${nps}" \
+    "${CUDA_PRECOND}" \
     "${log_file}"
 }
 
@@ -184,7 +201,7 @@ mkdir -p "${OUT_DIR}/${PROJECT}"
 BENCH_LOG="${OUT_DIR}/${PROJECT}/bench.log"
 SUMMARY_MD="${OUT_DIR}/${PROJECT}/bench_summary.md"
 
-printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\tnfe\tnli\tnni\tnetf\tnpe\tnps\tlog\n" >"${BENCH_LOG}"
+printf "backend\trun\twall_s\trun_wall_s\tcvode_s\tio_s\tforcing_s\tnfe\tnli\tnni\tnetf\tnpe\tnps\tcuda_precond\tlog\n" >"${BENCH_LOG}"
 
 for backend in "${BACKENDS[@]}"; do
   bin=""

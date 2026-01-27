@@ -173,9 +173,9 @@ void SetCVODE(void * &cvode_mem, CVRhsFn f, Model_Data *MD,  N_Vector udata, SUN
     flag = CVodeSStolerances(cvode_mem, MD->CS.reltol, MD->CS.abstol);
     check_flag(&flag, "CVodeSStolerances", 1);
     
-    /* CUDA preconditioner toggle (default ON for CUDA backend).
-     * - CLI: --precond / --no-precond
-     * - Env: SHUD_CUDA_PRECOND=0/1
+    /* CUDA preconditioner toggle (resolved in src/Model/shud.cpp).
+     * - CLI: --precond / --no-precond / --precond-auto
+     * - Env: SHUD_CUDA_PRECOND=0/1/auto
      */
     const bool use_cuda_precond =
 #ifdef _CUDA_ON

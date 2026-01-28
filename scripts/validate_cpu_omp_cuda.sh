@@ -38,7 +38,7 @@ Options:
                              Profiling mode (CUDA only; benchmark step only)
 
   --strict-fp <0|1>           Export SHUD_STRICT_FP for all runs (optional)
-  --det-reduce <0|1>          Export SHUD_DETERMINISTIC_REDUCE for all runs (optional)
+  --det-reduce <0|1>          Export SHUD_DETERMINISTIC_REDUCE for all runs (default: 1)
 
   --no-omp                   Skip OMP backend
   --no-cuda                  Skip CUDA backend
@@ -80,7 +80,7 @@ CUDA_PRECOND="default"
 CUDA_PRECOND_FP="default"
 PROFILE="none"
 STRICT_FP=""
-DET_REDUCE=""
+DET_REDUCE="1"
 NO_OMP=0
 NO_CUDA=0
 SKIP_BENCH=0
@@ -425,6 +425,10 @@ bench_run_one() {
   write_project_file "${prj_file}" "${PROJECT}" "${out_dir}" "${cfg_file}"
 
   local -a cmd=( "${bin}" -p "${prj_file}" "${PROJECT}" )
+  if [[ "${backend}" == "cuda" ]]; then
+    # Force actual CUDA execution (bypass backend auto-select threshold).
+    cmd=( "${bin}" --backend cuda -p "${prj_file}" "${PROJECT}" )
+  fi
 
   local -a cmd_prefix=()
   if [[ "${backend}" == "cuda" && "${PROFILE}" != "none" ]]; then
@@ -572,6 +576,10 @@ run_accuracy_backend() {
   write_project_file "${prj_file}" "${PROJECT}" "${out_dir}" "${cfg_file}"
 
   local -a cmd=( "${bin}" -p "${prj_file}" )
+  if [[ "${backend}" == "cuda" ]]; then
+    # Force actual CUDA execution (bypass backend auto-select threshold).
+    cmd=( "${bin}" --backend cuda -p "${prj_file}" )
+  fi
   cmd+=( "${extra_args[@]}" )
   cmd+=( "${PROJECT}" )
 

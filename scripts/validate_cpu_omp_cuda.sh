@@ -22,8 +22,8 @@ Options:
                              (default: 1,4,8)
   --end <days>               Override END (days) in cfg.para for all runs (default: use input/<project>/<project>.cfg.para)
 
-  --bench-io <off|all>       Benchmark output mode (default: off)
-  --acc-io <off|all>         Accuracy output mode (default: all)
+  --bench-io <off|none|all>  Benchmark output mode (default: off)
+  --acc-io <off|none|all>    Accuracy output mode (default: all)
 
   --tol-omp <float>          Accuracy tol for CPU vs OMP rel_max (default: 1e-10)
   --tol-cuda <float>         Accuracy tol for CPU vs CUDA rel_max (default: 1e-6)

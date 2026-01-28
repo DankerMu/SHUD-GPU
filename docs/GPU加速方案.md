@@ -589,7 +589,7 @@ CUDA 后端要用：
         
 6. **benchmark 脚本 + Nsight**
     
-    - `scripts/bench_cpu_omp_cuda.sh`
+    - `scripts/validate_cpu_omp_cuda.sh`
         
     - NVTX 标记加到 `f_cuda` 与 precond 上
         

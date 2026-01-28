@@ -115,9 +115,9 @@
 - 目前 wall time 不能分辨瓶颈是 RHS、CVODE 迭代、还是 I/O/同步。
 
 **交付物**
-1. 新增 `scripts/bench/run_bench.sh`：
-   - 支持 backend=cpu/omp/cuda
-   - 输出：wall time、RHS time、I/O time（粗粒度即可）
+1. 提供统一入口脚本 `scripts/validate_cpu_omp_cuda.sh`：
+   - 默认跑 `cpu + omp(n=1/4/8) + cuda`，并生成 benchmark + accuracy 报告
+   - 输出：wall time、CVODE stats、accuracy report（markdown）
 2. 在每次 run 输出 CVODE 统计（nfe/nli/nni/netf/npe 等）到 `bench.log`。
 3. 提供 `nvprof/nsys` 的可选入口（仅 CUDA）。
 

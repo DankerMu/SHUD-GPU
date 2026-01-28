@@ -73,11 +73,7 @@ static inline cudaStream_t SHUD_NVecCudaStream(N_Vector v)
 #define NV_DATA_OMP(v) SHUD_NVecHostData(v)
 #endif
 
-#ifdef _OPENMP_ON
-#define SET_VALUE(v, i) NV_Ith_OMP(v, i)
-#else
-#define SET_VALUE(v, i) NV_Ith_S(v, i)
-#endif
+#define SET_VALUE(v, i) (SHUD_NVecHostData(v)[(i)])
 
 /*========index===============*/
 #define iSF     i
@@ -174,7 +170,10 @@ extern int global_cuda_graph_mode;
 /* Auto mode: enable graph when NumY <= global_cuda_graph_max_ny. */
 extern int global_cuda_graph_max_ny;
 
-/* Strict FP / deterministic reduction toggles (CUDA backend only). */
+/* Strict FP / deterministic reduction toggles.
+ * - CUDA backend: controls kernel math/reduction paths.
+ * - OpenMP backend: SHUD_DETERMINISTIC_REDUCE requests deterministic-ish CVODE reductions.
+ */
 extern int global_strict_fp;
 extern int global_deterministic_reduce;
 

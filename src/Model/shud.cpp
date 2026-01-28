@@ -52,7 +52,7 @@ int global_precond_fp32 = 0; /* Whether CUDA preconditioner uses fp32 internal s
 int global_cuda_graph_mode = CUDA_GRAPH_AUTO; /* Requested CUDA Graph capture mode (CUDA backend only). */
 int global_cuda_graph_max_ny = 200000; /* Auto mode threshold: enable graph when NumY <= this value. */
 int global_strict_fp = 0; /* Runtime strict-fp request (CUDA backend only; requires strict build flags for full effect). */
-int global_deterministic_reduce = 1; /* Whether to use deterministic reductions in key CUDA kernels. */
+int global_deterministic_reduce = 1; /* Deterministic reduction toggle (CUDA kernels; also used for OMP deterministic-ish mode). */
 int global_backend_cli_set = 0; /* Whether --backend is explicitly set by CLI. */
 int global_output_groups = OUTPUT_GROUP_ALL; /* Runtime output group selection (OutputGroupMask bitmask). */
 int lakeon = 0; /* Whether lake module ON(1), OFF(0) */
@@ -391,23 +391,52 @@ double SHUD(FileIn *fin, FileOut *fout){
              * can be threaded independently from the OpenMP-parallel RHS loops.
              *
              * For performance, default NVECTOR threads to match `-n` (RHS threads).
-             * To prioritize deterministic-ish runs, override via env var:
+             *
+             * Deterministic-ish mode:
+             *   SHUD_DETERMINISTIC_REDUCE=1 forces deterministic reductions by
+             *   using NVECTOR_SERIAL for CVODE state vectors while still running
+             *   RHS loops with OpenMP threads.
+             *
+             * Manual override (when deterministic reduce is OFF):
              *   SHUD_NVEC_THREADS=1
              */
-            const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", nthreads);
+            const char *det_reduce_env = getenv("SHUD_DETERMINISTIC_REDUCE");
+            const bool det_reduce_env_set = (det_reduce_env != NULL && det_reduce_env[0] != '\0');
+            const bool deterministic_reduce =
+                (det_reduce_env_set || (global_strict_fp != 0)) && (global_deterministic_reduce != 0);
+
+            int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", deterministic_reduce ? 1 : nthreads);
+            if (deterministic_reduce && nvec_threads != 1) {
+                fprintf(stderr,
+                        "WARNING: SHUD_DETERMINISTIC_REDUCE=1 forces SHUD_NVEC_THREADS=1 (ignoring %d).\n",
+                        nvec_threads);
+                nvec_threads = 1;
+            }
             omp_set_num_threads(nthreads);
             maybePrintOmpAffinityHint();
             {
                 char msg[MAXLEN];
-                snprintf(msg,
-                         sizeof(msg),
-                         "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
-                         nthreads,
-                         nvec_threads);
+                if (deterministic_reduce) {
+                    snprintf(msg,
+                             sizeof(msg),
+                             "\nBackend: omp (NVECTOR_SERIAL; deterministic reductions). Threads = %d (RHS)\n",
+                             nthreads);
+                } else {
+                    snprintf(msg,
+                             sizeof(msg),
+                             "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
+                             nthreads,
+                             nvec_threads);
+                }
                 screeninfo(msg);
             }
-            udata = N_VNew_OpenMP(NY, nvec_threads, sunctx);
-            du = N_VNew_OpenMP(NY, nvec_threads, sunctx);
+            if (deterministic_reduce) {
+                udata = N_VNew_Serial(NY, sunctx);
+                du = N_VNew_Serial(NY, sunctx);
+            } else {
+                udata = N_VNew_OpenMP(NY, nvec_threads, sunctx);
+                du = N_VNew_OpenMP(NY, nvec_threads, sunctx);
+            }
             break;
         }
 #else
@@ -723,7 +752,18 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
     N5 = MD->NumLake;
 
     const int nthreads = max(MD->CS.num_threads, 1);
-    const int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", nthreads);
+    const char *det_reduce_env = getenv("SHUD_DETERMINISTIC_REDUCE");
+    const bool det_reduce_env_set = (det_reduce_env != NULL && det_reduce_env[0] != '\0');
+    const bool deterministic_reduce =
+        (det_reduce_env_set || (global_strict_fp != 0)) && (global_deterministic_reduce != 0);
+
+    int nvec_threads = parsePositiveIntEnv("SHUD_NVEC_THREADS", deterministic_reduce ? 1 : nthreads);
+    if (deterministic_reduce && nvec_threads != 1) {
+        fprintf(stderr,
+                "WARNING: SHUD_DETERMINISTIC_REDUCE=1 forces SHUD_NVEC_THREADS=1 (ignoring %d).\n",
+                nvec_threads);
+        nvec_threads = 1;
+    }
 
     if (global_backend == BACKEND_CUDA) {
         fprintf(stderr,
@@ -738,11 +778,18 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
         maybePrintOmpAffinityHint();
         {
             char msg[MAXLEN];
-            snprintf(msg,
-                     sizeof(msg),
-                     "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
-                     nthreads,
-                     nvec_threads);
+            if (deterministic_reduce) {
+                snprintf(msg,
+                         sizeof(msg),
+                         "\nBackend: omp (NVECTOR_SERIAL; deterministic reductions). Threads = %d (RHS)\n",
+                         nthreads);
+            } else {
+                snprintf(msg,
+                         sizeof(msg),
+                         "\nBackend: omp (NVECTOR_OPENMP). Threads = %d (RHS), %d (NVECTOR)\n",
+                         nthreads,
+                         nvec_threads);
+            }
             screeninfo(msg);
         }
 #else
@@ -761,17 +808,31 @@ double SHUD_uncouple(FileIn *fin, FileOut *fout){
 
     if (global_backend == BACKEND_OMP) {
 #ifdef _OPENMP_ON
-        u1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
-        u2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
-        u3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
-        u4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
-        u5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
+        if (deterministic_reduce) {
+            u1 = N_VNew_Serial(N1, sunctx1);
+            u2 = N_VNew_Serial(N2, sunctx2);
+            u3 = N_VNew_Serial(N3, sunctx3);
+            u4 = N_VNew_Serial(N4, sunctx4);
+            u5 = N_VNew_Serial(N5, sunctx5);
 
-        du1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
-        du2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
-        du3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
-        du4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
-        du5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
+            du1 = N_VNew_Serial(N1, sunctx1);
+            du2 = N_VNew_Serial(N2, sunctx2);
+            du3 = N_VNew_Serial(N3, sunctx3);
+            du4 = N_VNew_Serial(N4, sunctx4);
+            du5 = N_VNew_Serial(N5, sunctx5);
+        } else {
+            u1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
+            u2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
+            u3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
+            u4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
+            u5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
+
+            du1 = N_VNew_OpenMP(N1, nvec_threads, sunctx1);
+            du2 = N_VNew_OpenMP(N2, nvec_threads, sunctx2);
+            du3 = N_VNew_OpenMP(N3, nvec_threads, sunctx3);
+            du4 = N_VNew_OpenMP(N4, nvec_threads, sunctx4);
+            du5 = N_VNew_OpenMP(N5, nvec_threads, sunctx5);
+        }
 #endif
     } else {
         u1 = N_VNew_Serial(N1, sunctx1);
@@ -1053,7 +1114,7 @@ int SHUD(int argc, char *argv[]){
     }
     global_cuda_graph_max_ny = parsePositiveIntEnv("NY_CUDA_GRAPH_MAX", global_cuda_graph_max_ny);
 
-    /* Strict FP / deterministic reduction toggles (CUDA backend only).
+    /* Strict FP / deterministic reduction toggles.
      * - Env: SHUD_STRICT_FP=0/1 (also accepts true/false/on/off/yes/no)
      * - Env: SHUD_DETERMINISTIC_REDUCE=0/1 (also accepts true/false/on/off/yes/no)
      */

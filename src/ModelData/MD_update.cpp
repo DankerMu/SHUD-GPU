@@ -241,43 +241,29 @@ void Model_Data::summary (N_Vector udata){
 }
 void Model_Data::summary (N_Vector u1, N_Vector u2, N_Vector u3, N_Vector u4, N_Vector u5){
     
-#ifdef _OPENMP_ON
+    const double *y1 = NV_DATA_S(u1);
+    const double *y2 = NV_DATA_S(u2);
+    const double *y3 = NV_DATA_S(u3);
+    const double *y4 = NV_DATA_S(u4);
+    const double *y5 = NV_DATA_S(u5);
+
     for (int i = 0; i < NumEle; i++){
-        yEleSurf[i] = NV_Ith_OMP(u1, i);
-        yEleUnsat[i] = NV_Ith_OMP(u2, i);
-        yEleGW[i] = NV_Ith_OMP(u3, i);
+        yEleSurf[i] = y1[i];
+        yEleUnsat[i] = y2[i];
+        yEleGW[i] = y3[i];
         if(Ele[i].iBC > 0){
             yEleGW[i] = Ele[i].yBC;
         }
     }
     for (int i = 0; i < NumRiv; i++){
-        yRivStg[i] = NV_Ith_OMP(u4, i);
+        yRivStg[i] = y4[i];
         if(Riv[i].BC > 0){
             yRivStg[i] = Riv[i].yBC;
         }
     }
     for (int i = 0; i < NumLake; i++){
-        yLakeStg[i] = NV_Ith_OMP(u5, i);
+        yLakeStg[i] = y5[i];
     }
-#else
-    for (int i = 0; i < NumEle; i++){
-        yEleSurf[i] = NV_Ith_S(u1, i);
-        yEleUnsat[i] = NV_Ith_S(u2, i);
-        yEleGW[i] = NV_Ith_S(u3, i);
-        if(Ele[i].iBC > 0){
-            yEleGW[i] = Ele[i].yBC;
-        }
-    }
-    for (int i = 0; i < NumRiv; i++){
-        yRivStg[i] = NV_Ith_S(u4, i);
-        if(Riv[i].BC > 0){
-            yRivStg[i] = Riv[i].yBC;
-        }
-    }
-    for (int i = 0; i < NumLake; i++){
-        yLakeStg[i] = NV_Ith_S(u5, i);
-    }
-#endif
     Sub2Global(yEleSurf, yEleUnsat, yEleGW, yRivStg, yLakeStg, NumEle, NumRiv, NumLake);
 //    printVector(stdout, yEleSurf, 0, NumEle, 0);
 //    printVector(stdout, yEleUnsat, 0, NumEle, 0);

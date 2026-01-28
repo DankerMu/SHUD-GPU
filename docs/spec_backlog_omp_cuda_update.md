@@ -294,8 +294,11 @@ make clean && make shud && make shud_omp && make shud_cuda
 ./shud_cuda --backend cuda ccw
 
 python3 post_analysis/accuracy_comparison.py \
-  output/ccw_cpu output/ccw_omp output/ccw_cuda \
-  --tol_omp 1e-10 --tol_cuda 1e-6
+  --project ccw \
+  --cpu output/ccw_cpu \
+  --omp output/ccw_omp \
+  --cuda output/ccw_cuda \
+  --tol-omp 1e-10 --tol-cuda 1e-6
 ```
 
 ### 8.2 GPU verify（缩小时间窗）

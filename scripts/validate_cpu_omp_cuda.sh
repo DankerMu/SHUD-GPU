@@ -22,12 +22,8 @@ Options:
                              (default: 1,4,8)
   --end <days>               Override END (days) in cfg.para for all runs (default: use input/<project>/<project>.cfg.para)
 
-  --bench-io <groups>        Benchmark output mode (default: off)
-                             Notes:
-                               - Some shipped binaries may not support `--io`; in that case this script
-                                 approximates `off` by setting `BINARY_OUTPUT=0` and `ASCII_OUTPUT=0` in cfg.para.
-                               - Values other than `off|all` are only supported when the backend binary supports `--io`.
-  --acc-io <groups>          Accuracy output mode (default: all)
+  --bench-io <off|all>       Benchmark output mode (default: off)
+  --acc-io <off|all>         Accuracy output mode (default: all)
 
   --tol-omp <float>          Accuracy tol for CPU vs OMP rel_max (default: 1e-10)
   --tol-cuda <float>         Accuracy tol for CPU vs CUDA rel_max (default: 1e-6)
@@ -123,6 +119,15 @@ done
 [[ -n "${PROJECT}" ]] || die "--project is required"
 [[ -n "${BENCH_IO}" ]] || die "--bench-io requires a non-empty value"
 [[ -n "${ACC_IO}" ]] || die "--acc-io requires a non-empty value"
+
+case "${BENCH_IO}" in
+  off|none|all) ;;
+  *) die "invalid --bench-io '${BENCH_IO}' (expect off|none|all)" ;;
+esac
+case "${ACC_IO}" in
+  off|none|all) ;;
+  *) die "invalid --acc-io '${ACC_IO}' (expect off|none|all)" ;;
+esac
 
 if [[ -z "${TAG}" ]]; then
   TAG="$(date +%Y%m%d_%H%M%S)"
